@@ -8,13 +8,19 @@ permissions:
   contents: read
 
 # Set the repository variable BUTCHERBIRD_RUNNER_LABELS to a JSON array to
-# move this job onto self-hosted runners, for example:
+# move these jobs onto self-hosted runners, for example:
 # ["self-hosted","linux","arm64"]
+# The runner still needs network access so the setup actions can install
+# Rust, Python and the .NET 8 SDK.
+
 jobs:
   rust:
     runs-on: ${{ fromJSON(vars.BUTCHERBIRD_RUNNER_LABELS || '["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -24,6 +30,44 @@ jobs:
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings
       - name: test
-        run: cargo test --all
+        run: cargo test --workspace --all-targets
       - name: cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2
+
+  python:
+    runs-on: ${{ fromJSON(vars.BUTCHERBIRD_RUNNER_LABELS || '["ubuntu-latest"]') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: tools
+        run: python -m pip install maturin pytest ruff mypy
+      - name: develop
+        run: maturin develop --manifest-path bindings/python/pyproject.toml
+      - name: ruff
+        run: ruff check bindings/python
+      - name: mypy
+        run: mypy --config-file bindings/python/pyproject.toml bindings/python/python bindings/python/tests
+      - name: pytest
+        run: pytest bindings/python/tests
+
+  dotnet:
+    runs-on: ${{ fromJSON(vars.BUTCHERBIRD_RUNNER_LABELS || '["ubuntu-latest"]') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: format
+        working-directory: bindings/dotnet
+        run: |
+          dotnet format Butcherbird/Butcherbird.csproj --verify-no-changes
+          dotnet format Butcherbird.Tests/Butcherbird.Tests.csproj --verify-no-changes
+      - name: test
+        working-directory: bindings/dotnet
+        run: dotnet test Butcherbird.Tests/Butcherbird.Tests.csproj --nologo

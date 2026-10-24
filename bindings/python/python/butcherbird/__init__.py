@@ -16,6 +16,7 @@ from butcherbird._native import (
     write_evidence_pack,
 )
 
+
 async def check(engine: CheckEngine, iocs: list[Ioc]) -> list[CheckResult]:
     """Run lookups without blocking the event loop."""
     return await asyncio.to_thread(engine.check, iocs)

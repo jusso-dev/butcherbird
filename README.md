@@ -6,7 +6,7 @@ Butcherbird checks indicators of compromise (IPs, domains, URLs, file hashes, em
 
 `butcherbird check` parses indicators and looks them up across the sources in [docs/architecture.md](docs/architecture.md). Successful lookups are cached in SQLite. `butcherbird report` can submit the malicious ones to AbuseIPDB, URLhaus, ThreatFox and Netcraft, and it can mail the RDAP abuse contact. It is a dry run unless you pass `--submit`. The Python package is in [bindings/python](bindings/python/README.md). The C# package is in [bindings/dotnet](bindings/dotnet/README.md).
 
-Lookups send indicators to those providers. Read [docs/responsible-use.md](docs/responsible-use.md) before you point it at real data.
+Lookups send indicators to those providers. Read [docs/responsible-use.md](docs/responsible-use.md) before you point it at real data. To add a source, read [docs/adding-a-provider.md](docs/adding-a-provider.md).
 
 ## Install
 
@@ -144,14 +144,19 @@ Provider tests use recorded HTTP fixtures. They do not call the network.
 ```sh
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
-cargo test --all
+cargo test --workspace --all-targets
 ```
 
-CI runs those commands. Set the repository variable `BUTCHERBIRD_RUNNER_LABELS` to a JSON array (for example `["self-hosted","linux"]`) to move CI onto self-hosted runners. The default is `ubuntu-latest`.
+CI also runs `ruff`, `mypy`, `pytest`, `dotnet format` and `dotnet test`. Set the repository variable `BUTCHERBIRD_RUNNER_LABELS` to a JSON array (for example `["self-hosted","linux"]`) to move CI onto self-hosted runners. The default is `ubuntu-latest`.
+
+## Releases
+
+A `v*` tag builds the CLI, Python wheels and a NuGet package for Linux x64, macOS arm64 and Windows x64, and attaches them to a GitHub release. Publishing to crates.io, PyPI and NuGet happens only when `CARGO_REGISTRY_TOKEN`, `PYPI_API_TOKEN` and `NUGET_API_KEY` are set. Bump the workspace version, `bindings/python/pyproject.toml` and the .NET package version before the tag.
 
 ## Docs
 
 - [Architecture](docs/architecture.md)
+- [Add a provider](docs/adding-a-provider.md)
 - [Responsible use](docs/responsible-use.md)
 
 ## License
