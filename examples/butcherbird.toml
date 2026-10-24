@@ -1,0 +1,21 @@
+# Copy to ./butcherbird.toml or ~/.config/butcherbird/butcherbird.toml.
+# Prefer environment variables over api_key in this file.
+# ABUSEIPDB_API_KEY, URLHAUS_AUTH_KEY, VIRUSTOTAL_API_KEY
+
+profile = "default"
+
+[profiles.default]
+max_concurrency = 8
+timeout_secs = 20
+
+[profiles.default.providers.abuseipdb]
+api_key_env = "ABUSEIPDB_API_KEY"
+rate_per_minute = 60
+
+[profiles.default.providers.urlhaus]
+api_key_env = "URLHAUS_AUTH_KEY"
+rate_per_minute = 60
+
+[profiles.default.providers.virustotal]
+api_key_env = "VIRUSTOTAL_API_KEY"
+rate_per_minute = 4

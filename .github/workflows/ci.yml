@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+# Set the repository variable BUTCHERBIRD_RUNNER_LABELS to a JSON array to
+# move this job onto self-hosted runners, for example:
+# ["self-hosted","linux","arm64"]
+jobs:
+  rust:
+    runs-on: ${{ fromJSON(vars.BUTCHERBIRD_RUNNER_LABELS || '["ubuntu-latest"]') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: fmt
+        run: cargo fmt --all --check
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: test
+        run: cargo test --all
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
