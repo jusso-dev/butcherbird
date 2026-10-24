@@ -118,6 +118,7 @@ impl Reporter for ThreatFoxReporter {
         });
         ReportPlan::Ready {
             payload: redact(&body.to_string(), &self.api_key),
+            destination: THREATFOX_META.id.to_string(),
         }
     }
 
@@ -169,7 +170,7 @@ mod tests {
             50,
         );
         let url = parse_ioc("https://phish.example/login").unwrap();
-        let ReportPlan::Ready { payload } = reporter.prepare(&url) else {
+        let ReportPlan::Ready { payload, .. } = reporter.prepare(&url) else {
             panic!("expected a payload");
         };
         assert!(!payload.contains("secret-key"));

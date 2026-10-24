@@ -146,6 +146,9 @@ pub enum ProviderError {
     /// The body was not the documented shape.
     #[error("invalid response")]
     Decode,
+    /// The report was not sent. The message is safe to print.
+    #[error("{0}")]
+    Rejected(String),
 }
 
 /// Build the built-in providers, skipping ones that are disabled or have no key.

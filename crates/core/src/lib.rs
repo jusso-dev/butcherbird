@@ -21,7 +21,9 @@ pub use enrich::{exit_code, Engine, IocReport};
 pub use ioc::{extract_iocs, load_iocs, parse_ioc, InputFormat, Ioc, IocType};
 pub use output::{render, OutputFormat};
 pub use provider::{AuthKind, Provider, ProviderError, ProviderMeta, Slot, Tier};
-pub use report::{render_reports, report_exit_code, ReportEngine, ReportRow, ReportStatus};
+pub use report::{
+    render_reports, report_exit_code, write_evidence_pack, ReportEngine, ReportRow, ReportStatus,
+};
 pub use score::{Finding, SourceReport, SourceStatus, Verdict};
 pub use secret::Secret;
 
