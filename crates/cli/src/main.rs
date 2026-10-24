@@ -107,7 +107,7 @@ fn main() -> ExitCode {
 
 fn error_code(err: &Error) -> u8 {
     match err {
-        Error::Config(_) | Error::Input(_) => 3,
+        Error::Config(_) | Error::Input(_) | Error::Cache(_) => 3,
         Error::Client(_) => 4,
     }
 }

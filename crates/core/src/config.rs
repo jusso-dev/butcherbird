@@ -14,10 +14,73 @@ use serde::Deserialize;
 use crate::secret::Secret;
 use crate::Error;
 
-const BUILTINS: &[(&str, &str)] = &[
-    ("abuseipdb", "ABUSEIPDB_API_KEY"),
-    ("urlhaus", "URLHAUS_AUTH_KEY"),
-    ("virustotal", "VIRUSTOTAL_API_KEY"),
+struct Builtin {
+    id: &'static str,
+    /// `None` for providers that do not take an API key.
+    env: Option<&'static str>,
+}
+
+const BUILTINS: &[Builtin] = &[
+    Builtin {
+        id: "abuseipdb",
+        env: Some("ABUSEIPDB_API_KEY"),
+    },
+    Builtin {
+        id: "urlhaus",
+        env: Some("URLHAUS_AUTH_KEY"),
+    },
+    Builtin {
+        id: "virustotal",
+        env: Some("VIRUSTOTAL_API_KEY"),
+    },
+    Builtin {
+        id: "otx",
+        env: Some("OTX_API_KEY"),
+    },
+    Builtin {
+        id: "greynoise",
+        env: Some("GREYNOISE_API_KEY"),
+    },
+    Builtin {
+        id: "shodan",
+        env: Some("SHODAN_API_KEY"),
+    },
+    Builtin {
+        id: "urlscan",
+        env: Some("URLSCAN_API_KEY"),
+    },
+    Builtin {
+        id: "threatfox",
+        env: Some("THREATFOX_AUTH_KEY"),
+    },
+    Builtin {
+        id: "malwarebazaar",
+        env: Some("MALWAREBAZAAR_AUTH_KEY"),
+    },
+    Builtin {
+        id: "safebrowsing",
+        env: Some("SAFEBROWSING_API_KEY"),
+    },
+    Builtin {
+        id: "openphish",
+        env: None,
+    },
+    Builtin {
+        id: "spamhaus-zen",
+        env: None,
+    },
+    Builtin {
+        id: "spamhaus-dbl",
+        env: None,
+    },
+    Builtin {
+        id: "rdap",
+        env: None,
+    },
+    Builtin {
+        id: "whois",
+        env: None,
+    },
 ];
 
 /// Resolved runtime config for one profile.
@@ -29,7 +92,20 @@ pub struct Config {
     pub max_concurrency: usize,
     /// Per-request HTTP timeout.
     pub timeout: Duration,
+    /// Local SQLite cache of successful lookups.
+    pub cache: CacheSettings,
     providers: BTreeMap<String, ProviderSettings>,
+}
+
+/// Where successful lookups are stored.
+#[derive(Clone)]
+pub struct CacheSettings {
+    /// When false, every lookup hits the provider.
+    pub enabled: bool,
+    /// SQLite file. Parent directories are created.
+    pub path: PathBuf,
+    /// How long a stored finding is reused.
+    pub ttl: Duration,
 }
 
 /// One provider's resolved settings.
@@ -87,14 +163,18 @@ impl Config {
         let max_concurrency = profile_file.max_concurrency.unwrap_or(8).max(1);
         let timeout_secs = profile_file.timeout_secs.unwrap_or(20).max(1);
         let mut providers = BTreeMap::new();
-        for (id, default_env) in BUILTINS {
-            let raw = profile_file.providers.get(*id);
-            providers.insert((*id).to_string(), resolve_provider(raw, default_env, env)?);
+        for builtin in BUILTINS {
+            let raw = profile_file.providers.get(builtin.id);
+            providers.insert(
+                builtin.id.to_string(),
+                resolve_provider(raw, builtin.env, env)?,
+            );
         }
         Ok(Self {
             profile,
             max_concurrency,
             timeout: Duration::from_secs(timeout_secs),
+            cache: resolve_cache(profile_file.cache.as_ref()),
             providers,
         })
     }
@@ -113,6 +193,9 @@ impl fmt::Debug for Config {
             .field("profile", &self.profile)
             .field("max_concurrency", &self.max_concurrency)
             .field("timeout", &self.timeout)
+            .field("cache_enabled", &self.cache.enabled)
+            .field("cache_path", &self.cache.path)
+            .field("cache_ttl", &self.cache.ttl)
             .field("providers", &self.providers)
             .finish()
     }
@@ -132,28 +215,65 @@ impl fmt::Debug for ProviderSettings {
 
 fn resolve_provider(
     raw: Option<&ProviderFile>,
-    default_env: &str,
+    default_env: Option<&str>,
     env: &HashMap<String, String>,
 ) -> Result<ProviderSettings, Error> {
     let raw = raw.cloned().unwrap_or_default();
     if let Some(url) = &raw.base_url {
         validate_base_url(url)?;
     }
-    let env_name = raw
-        .api_key_env
-        .clone()
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| default_env.to_string());
-    let api_key = env_nonempty(env, &env_name)
-        .map(Secret::new)
-        .or_else(|| raw.api_key.filter(|key| !key.is_empty()).map(Secret::new));
+    let (api_key, api_key_env) = if let Some(default_env) = default_env {
+        let env_name = raw
+            .api_key_env
+            .clone()
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| default_env.to_string());
+        let api_key = env_nonempty(env, &env_name)
+            .map(Secret::new)
+            .or_else(|| raw.api_key.filter(|key| !key.is_empty()).map(Secret::new));
+        (api_key, Some(env_name))
+    } else {
+        (None, None)
+    };
     Ok(ProviderSettings {
         enabled: raw.enabled.unwrap_or(true),
         api_key,
-        api_key_env: Some(env_name),
+        api_key_env,
         base_url: raw.base_url,
         rate_per_minute: raw.rate_per_minute,
     })
+}
+
+fn resolve_cache(raw: Option<&CacheFile>) -> CacheSettings {
+    let raw = raw.cloned().unwrap_or_default();
+    let path = raw
+        .path
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(default_cache_path);
+    CacheSettings {
+        enabled: raw.enabled.unwrap_or(true),
+        path,
+        ttl: Duration::from_secs(raw.ttl_secs.unwrap_or(86_400)),
+    }
+}
+
+fn default_cache_path() -> PathBuf {
+    if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
+        return PathBuf::from(xdg).join("butcherbird").join("cache.sqlite");
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home)
+            .join(".cache")
+            .join("butcherbird")
+            .join("cache.sqlite");
+    }
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(local)
+            .join("butcherbird")
+            .join("cache.sqlite");
+    }
+    PathBuf::from("butcherbird-cache.sqlite")
 }
 
 fn validate_base_url(value: &str) -> Result<(), Error> {
@@ -222,7 +342,16 @@ struct ProfileFile {
     max_concurrency: Option<usize>,
     timeout_secs: Option<u64>,
     #[serde(default)]
+    cache: Option<CacheFile>,
+    #[serde(default)]
     providers: BTreeMap<String, ProviderFile>,
+}
+
+#[derive(Clone, Deserialize, Default)]
+struct CacheFile {
+    enabled: Option<bool>,
+    path: Option<String>,
+    ttl_secs: Option<u64>,
 }
 
 #[derive(Clone, Deserialize, Default)]
@@ -305,5 +434,30 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("scheme"));
+    }
+
+    #[test]
+    fn keyless_provider_has_no_env_and_otx_reads_its_env() {
+        let mut env = HashMap::new();
+        env.insert("OTX_API_KEY".to_string(), "otx-test-secret".to_string());
+        let cfg = Config::from_toml_with_env(
+            r#"
+            [profiles.default.cache]
+            enabled = false
+            "#,
+            None,
+            &env,
+        )
+        .unwrap();
+        assert!(!cfg.cache.enabled);
+        assert!(cfg.provider("openphish").api_key.is_none());
+        assert!(cfg.provider("openphish").api_key_env.is_none());
+        assert!(cfg.provider("spamhaus-zen").enabled);
+        let rendered = format!("{cfg:?}");
+        assert!(!rendered.contains("test-secret"), "{rendered}");
+        assert_eq!(
+            cfg.provider("otx").api_key.as_ref().unwrap().masked(),
+            "otx-****"
+        );
     }
 }

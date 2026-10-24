@@ -1,13 +1,35 @@
 //! Pluggable enrichment providers.
 
 mod abuseipdb;
+mod greynoise;
 mod http;
+mod malwarebazaar;
+mod openphish;
+mod otx;
+mod rdap;
+mod safebrowsing;
+mod shodan;
+mod spamhaus;
+mod threatfox;
 mod urlhaus;
+mod urlscan;
 mod virustotal;
+mod whois;
 
 pub use abuseipdb::{AbuseIpdb, ABUSEIPDB_META};
+pub use greynoise::{GreyNoise, GREYNOISE_META};
+pub use malwarebazaar::{MalwareBazaar, MALWAREBAZAAR_META};
+pub use openphish::{OpenPhish, OPENPHISH_META};
+pub use otx::{Otx, OTX_META};
+pub use rdap::{Rdap, RDAP_META};
+pub use safebrowsing::{SafeBrowsing, SAFEBROWSING_META};
+pub use shodan::{Shodan, SHODAN_META};
+pub use spamhaus::{SpamhausDbl, SpamhausZen, SPAMHAUS_DBL_META, SPAMHAUS_ZEN_META};
+pub use threatfox::{ThreatFox, THREATFOX_META};
 pub use urlhaus::{Urlhaus, URLHAUS_META};
+pub use urlscan::{Urlscan, URLSCAN_META};
 pub use virustotal::{VirusTotal, VIRUSTOTAL_META};
+pub use whois::{Whois, WHOIS_META};
 
 use std::sync::Arc;
 
@@ -130,7 +152,19 @@ pub fn builtin_slots(cfg: &Config) -> Result<Vec<Slot>, Error> {
     Ok(vec![
         abuseipdb::slot(cfg, client.clone()),
         urlhaus::slot(cfg, client.clone()),
-        virustotal::slot(cfg, client),
+        virustotal::slot(cfg, client.clone()),
+        otx::slot(cfg, client.clone()),
+        greynoise::slot(cfg, client.clone()),
+        shodan::slot(cfg, client.clone()),
+        urlscan::slot(cfg, client.clone()),
+        threatfox::slot(cfg, client.clone()),
+        malwarebazaar::slot(cfg, client.clone()),
+        safebrowsing::slot(cfg, client.clone()),
+        openphish::slot(cfg, client.clone()),
+        spamhaus::zen_slot(cfg),
+        spamhaus::dbl_slot(cfg),
+        rdap::slot(cfg, client),
+        whois::slot(cfg),
     ])
 }
 
@@ -150,6 +184,45 @@ pub(crate) fn configured_rate(meta: ProviderMeta, configured: Option<u32>) -> u3
         Some(0) | None => meta.default_rate_per_minute,
         Some(rate) => rate,
     }
+}
+
+pub(crate) fn origin(cfg: &Config, id: &str, default: &str) -> String {
+    cfg.provider(id)
+        .base_url
+        .clone()
+        .unwrap_or_else(|| default.to_string())
+}
+
+pub(crate) fn rate_of(cfg: &Config, meta: ProviderMeta) -> u32 {
+    configured_rate(meta, cfg.provider(meta.id).rate_per_minute)
+}
+
+/// Keyless providers still honour `enabled = false`.
+pub(crate) fn enabled_or_skip(cfg: &Config, meta: ProviderMeta) -> Result<(), Slot> {
+    if cfg.provider(meta.id).enabled {
+        Ok(())
+    } else {
+        Err(skipped(meta, "disabled"))
+    }
+}
+
+pub(crate) fn is_not_found(err: &ProviderError) -> bool {
+    matches!(err, ProviderError::Http { status: 404, .. })
+}
+
+/// Host from a URL, without brackets on IPv6.
+pub(crate) fn host_of(value: &str) -> Option<String> {
+    let url = url::Url::parse(value).ok()?;
+    url.host_str()
+        .map(|host| host.trim_matches(['[', ']']).to_string())
+}
+
+pub(crate) fn clip_detail(detail: &str) -> String {
+    let mut clipped: String = detail.chars().take(180).collect();
+    if detail.chars().count() > 180 {
+        clipped.push('…');
+    }
+    clipped
 }
 
 /// Key-gated providers share this skip decision.
