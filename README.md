@@ -1,4 +1,6 @@
-<img src="assets/icon.svg" width="64" height="64" alt="">
+<p align="center">
+  <img src="assets/banner.jpg" alt="Butcherbird: threat intelligence, IOC analysis and abuse reporting for IPs, domains, URLs, hashes, emails and ASNs" width="100%">
+</p>
 
 # Butcherbird
 
