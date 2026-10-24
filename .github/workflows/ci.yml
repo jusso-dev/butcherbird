@@ -45,10 +45,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: tools
         run: python -m pip install maturin pytest ruff mypy
-      # maturin develop refuses to run without a virtualenv. Install the wheel.
+      # maturin develop needs a virtualenv. --manifest-path must be Cargo.toml.
       - name: install
         run: |
-          maturin build --manifest-path bindings/python/pyproject.toml --out dist
+          maturin build --manifest-path bindings/python/Cargo.toml --out dist
           python -m pip install dist/*.whl
       - name: ruff
         run: ruff check bindings/python
