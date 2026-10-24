@@ -11,6 +11,8 @@ __pycache__/
 bindings/python/**/*.so
 bindings/python/**/*.pyd
 bindings/python/**/*.egg-info/
+bindings/dotnet/**/bin/
+bindings/dotnet/**/obj/
 .env
 .env.*
 !.env.example
