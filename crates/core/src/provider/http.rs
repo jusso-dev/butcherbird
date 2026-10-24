@@ -49,6 +49,19 @@ pub(crate) fn client(timeout: Duration) -> Result<reqwest::Client, Error> {
         .map_err(|err| Error::Client(err.to_string()))
 }
 
+/// Percent-encode a single URL path segment.
+pub(crate) fn encode_segment(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(byte as char);
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
 /// Send a request, spacing calls through `gate` and backing off on 429 and 5xx.
 pub(crate) async fn send<F, Fut>(
     gate: &IntervalGate,

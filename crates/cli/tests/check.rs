@@ -42,6 +42,24 @@ async fn check_writes_json_and_exits_1_for_malicious() {
             api_key = "bb-test-secret-key"
             base_url = "{url}"
             rate_per_minute = 60000
+
+            [profiles.default.cache]
+            enabled = false
+
+            [profiles.default.providers.openphish]
+            enabled = false
+
+            [profiles.default.providers.spamhaus-zen]
+            enabled = false
+
+            [profiles.default.providers.spamhaus-dbl]
+            enabled = false
+
+            [profiles.default.providers.rdap]
+            enabled = false
+
+            [profiles.default.providers.whois]
+            enabled = false
             "#
         ),
     )
@@ -61,6 +79,13 @@ async fn check_writes_json_and_exits_1_for_malicious() {
         .env_remove("ABUSEIPDB_API_KEY")
         .env_remove("VIRUSTOTAL_API_KEY")
         .env_remove("URLHAUS_AUTH_KEY")
+        .env_remove("OTX_API_KEY")
+        .env_remove("GREYNOISE_API_KEY")
+        .env_remove("SHODAN_API_KEY")
+        .env_remove("URLSCAN_API_KEY")
+        .env_remove("THREATFOX_AUTH_KEY")
+        .env_remove("MALWAREBAZAAR_AUTH_KEY")
+        .env_remove("SAFEBROWSING_API_KEY")
         .env_remove("BUTCHERBIRD_CONFIG")
         .env_remove("BUTCHERBIRD_PROFILE")
         .env_remove("RUST_LOG")

@@ -4,13 +4,15 @@ Butcherbird sends indicators to third-party threat-intel services. Those service
 
 ## Terms and rate limits
 
-Each provider has its own terms. You need an account and a key where the provider requires one. The client limits itself (AbuseIPDB and URLhaus default to 60 requests per minute, VirusTotal to 4). That default is a courtesy cap, not a promise that you are inside the provider's quota. Lower `rate_per_minute` in config if your plan is smaller. A 429 is retried with backoff. Do not point the tool at a provider in order to get around its limits.
+Each provider has its own terms. You need an account and a key where the provider requires one. The client limits itself (see the rate column in [architecture](architecture.md)). That default is a courtesy cap, not a promise that you are inside the provider's quota. Lower `rate_per_minute` in config if your plan is smaller. A 429 is retried with backoff. Do not point the tool at a provider in order to get around its limits.
 
-VirusTotal, AbuseIPDB and URLhaus are free tiers with an API key. Paid plans are not required for the calls this version makes. Stay inside the plan you actually have.
+The keyed sources are free tiers. Paid plans are not required for the calls this version makes. Stay inside the plan you actually have.
+
+OpenPhish is a feed downloaded to this machine. The indicator is matched locally and is not sent to OpenPhish. Spamhaus ZEN and DBL are DNS queries, so the resolver and Spamhaus see the name you ask about. RDAP and WHOIS send the indicator to those directories. A cached row is reused until its TTL (24 hours by default), including after a provider would have changed its answer.
 
 ## Keys
 
-Put keys in environment variables (`ABUSEIPDB_API_KEY`, `URLHAUS_AUTH_KEY`, `VIRUSTOTAL_API_KEY`) or in a config file that is not committed. The tool masks keys in `Debug`, `Display` and HTTP error text. It cannot mask a key you print yourself, or a key that appears in a shell trace. Do not pass keys on the command line.
+Put keys in environment variables (`ABUSEIPDB_API_KEY`, `URLHAUS_AUTH_KEY`, `VIRUSTOTAL_API_KEY`, `OTX_API_KEY`, `GREYNOISE_API_KEY`, `SHODAN_API_KEY`, `URLSCAN_API_KEY`, `THREATFOX_AUTH_KEY`, `MALWAREBAZAAR_AUTH_KEY`, `SAFEBROWSING_API_KEY`) or in a config file that is not committed. The tool masks keys in `Debug`, `Display` and HTTP error text. It cannot mask a key you print yourself, or a key that appears in a shell trace. Do not pass keys on the command line. The cache stores the verdict and the short detail, not the key.
 
 A URL with a username or password is stripped before it is stored as the indicator. Do not rely on that as your only control. Prefer not to paste credentials into indicator files.
 

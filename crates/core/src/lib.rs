@@ -1,9 +1,11 @@
-//! Indicator parsing, enrichment and scoring for Butcherbird.
+//! Indicator parsing, enrichment, caching and scoring for Butcherbird.
 //!
 //! Lookups send indicators to third-party services. Reporting lives in later
 //! crates and is dry-run unless a caller opts in.
 
 #![forbid(unsafe_code)]
+
+mod cache;
 
 pub mod config;
 pub mod enrich;
@@ -33,4 +35,7 @@ pub enum Error {
     /// HTTP client could not be built.
     #[error("http client: {0}")]
     Client(String),
+    /// Local result cache could not be opened.
+    #[error("cache: {0}")]
+    Cache(String),
 }

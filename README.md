@@ -4,7 +4,7 @@
 
 Butcherbird checks indicators of compromise (IPs, domains, URLs, file hashes, email addresses, ASNs) against threat-intel sources and returns one verdict per indicator.
 
-This repository is the first milestone: parsing and normalisation, plus the `check` command with AbuseIPDB, URLhaus and VirusTotal. Caching, the remaining sources, reporting, and the Python and C# bindings are not built yet.
+`butcherbird check` parses indicators and looks them up across the sources in [docs/architecture.md](docs/architecture.md). Successful lookups are cached in SQLite. Reporting, and the Python and C# bindings, are not built yet.
 
 Lookups send indicators to those providers. Read [docs/responsible-use.md](docs/responsible-use.md) before you point it at real data.
 
@@ -28,6 +28,13 @@ Rust 1.85 or newer.
 export ABUSEIPDB_API_KEY=...
 export URLHAUS_AUTH_KEY=...
 export VIRUSTOTAL_API_KEY=...
+export OTX_API_KEY=...
+export GREYNOISE_API_KEY=...
+export SHODAN_API_KEY=...
+export URLSCAN_API_KEY=...
+export THREATFOX_AUTH_KEY=...
+export MALWAREBAZAAR_AUTH_KEY=...
+export SAFEBROWSING_API_KEY=...
 
 butcherbird check examples/iocs.txt
 butcherbird check examples/prose.txt --output json
@@ -52,10 +59,16 @@ profile = "default"
 max_concurrency = 8
 timeout_secs = 20
 
+[profiles.default.cache]
+enabled = true
+ttl_secs = 86400
+
 [profiles.default.providers.virustotal]
 api_key_env = "VIRUSTOTAL_API_KEY"
 rate_per_minute = 4
 ```
+
+OpenPhish, Spamhaus ZEN, Spamhaus DBL, RDAP and WHOIS do not take a key. Set `enabled = false` on a provider to skip it. The cache file defaults to `$XDG_CACHE_HOME/butcherbird/cache.sqlite` or `~/.cache/butcherbird/cache.sqlite`.
 
 `--profile lab` selects `[profiles.lab]`. `BUTCHERBIRD_PROFILE` does the same when the flag is omitted. A sample file is in `examples/butcherbird.toml`.
 

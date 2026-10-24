@@ -172,17 +172,6 @@ fn status_str(status: SourceStatus) -> &'static str {
     }
 }
 
-impl Verdict {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Malicious => "malicious",
-            Self::Suspicious => "suspicious",
-            Self::Clean => "clean",
-            Self::Unknown => "unknown",
-        }
-    }
-}
-
 fn render_markdown(reports: &[IocReport]) -> String {
     let mut out = String::from("# Butcherbird report\n\n");
     if reports.is_empty() {
@@ -288,6 +277,7 @@ mod tests {
                 verdict: Some(Verdict::Malicious),
                 confidence: Some(90),
                 detail: "score 90, 2 reports".to_string(),
+                cached: false,
             }],
         }
     }

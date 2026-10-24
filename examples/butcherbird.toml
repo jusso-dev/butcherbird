@@ -1,12 +1,19 @@
 # Copy to ./butcherbird.toml or ~/.config/butcherbird/butcherbird.toml.
 # Prefer environment variables over api_key in this file.
-# ABUSEIPDB_API_KEY, URLHAUS_AUTH_KEY, VIRUSTOTAL_API_KEY
+# ABUSEIPDB_API_KEY, URLHAUS_AUTH_KEY, VIRUSTOTAL_API_KEY, OTX_API_KEY,
+# GREYNOISE_API_KEY, SHODAN_API_KEY, URLSCAN_API_KEY, THREATFOX_AUTH_KEY,
+# MALWAREBAZAAR_AUTH_KEY, SAFEBROWSING_API_KEY
+# OpenPhish, Spamhaus, RDAP and WHOIS do not take a key.
 
 profile = "default"
 
 [profiles.default]
 max_concurrency = 8
 timeout_secs = 20
+
+[profiles.default.cache]
+enabled = true
+ttl_secs = 86400
 
 [profiles.default.providers.abuseipdb]
 api_key_env = "ABUSEIPDB_API_KEY"
@@ -19,3 +26,46 @@ rate_per_minute = 60
 [profiles.default.providers.virustotal]
 api_key_env = "VIRUSTOTAL_API_KEY"
 rate_per_minute = 4
+
+[profiles.default.providers.otx]
+api_key_env = "OTX_API_KEY"
+rate_per_minute = 30
+
+[profiles.default.providers.greynoise]
+api_key_env = "GREYNOISE_API_KEY"
+rate_per_minute = 10
+
+[profiles.default.providers.shodan]
+api_key_env = "SHODAN_API_KEY"
+rate_per_minute = 60
+
+[profiles.default.providers.urlscan]
+api_key_env = "URLSCAN_API_KEY"
+rate_per_minute = 30
+
+[profiles.default.providers.threatfox]
+api_key_env = "THREATFOX_AUTH_KEY"
+rate_per_minute = 60
+
+[profiles.default.providers.malwarebazaar]
+api_key_env = "MALWAREBAZAAR_AUTH_KEY"
+rate_per_minute = 60
+
+[profiles.default.providers.safebrowsing]
+api_key_env = "SAFEBROWSING_API_KEY"
+rate_per_minute = 60
+
+[profiles.default.providers.openphish]
+rate_per_minute = 2
+
+[profiles.default.providers.spamhaus-zen]
+rate_per_minute = 30
+
+[profiles.default.providers.spamhaus-dbl]
+rate_per_minute = 30
+
+[profiles.default.providers.rdap]
+rate_per_minute = 30
+
+[profiles.default.providers.whois]
+rate_per_minute = 10

@@ -116,30 +116,18 @@ impl Provider for VirusTotal {
 fn object_path(ioc: &Ioc) -> String {
     match ioc.kind {
         IocType::Ipv4 | IocType::Ipv6 => {
-            format!("/api/v3/ip_addresses/{}", encode_segment(&ioc.value))
+            format!("/api/v3/ip_addresses/{}", http::encode_segment(&ioc.value))
         }
-        IocType::Domain => format!("/api/v3/domains/{}", encode_segment(&ioc.value)),
+        IocType::Domain => format!("/api/v3/domains/{}", http::encode_segment(&ioc.value)),
         IocType::Url => format!(
             "/api/v3/urls/{}",
             URL_SAFE_NO_PAD.encode(ioc.value.as_bytes())
         ),
         IocType::Md5 | IocType::Sha1 | IocType::Sha256 => {
-            format!("/api/v3/files/{}", encode_segment(&ioc.value))
+            format!("/api/v3/files/{}", http::encode_segment(&ioc.value))
         }
         _ => "/api/v3/".to_string(),
     }
-}
-
-fn encode_segment(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-            out.push(byte as char);
-        } else {
-            out.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    out
 }
 
 fn stat(stats: &Value, name: &str) -> u64 {

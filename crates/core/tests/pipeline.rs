@@ -64,6 +64,24 @@ async fn combines_three_providers_without_leaking_the_key() {
         api_key = "bb-test-secret-key"
         base_url = "{url}"
         rate_per_minute = 60000
+
+        [profiles.default.cache]
+        enabled = false
+
+        [profiles.default.providers.openphish]
+        enabled = false
+
+        [profiles.default.providers.spamhaus-zen]
+        enabled = false
+
+        [profiles.default.providers.spamhaus-dbl]
+        enabled = false
+
+        [profiles.default.providers.rdap]
+        enabled = false
+
+        [profiles.default.providers.whois]
+        enabled = false
         "#,
         url = server.uri()
     );
@@ -91,7 +109,13 @@ async fn combines_three_providers_without_leaking_the_key() {
         .sources
         .iter()
         .any(|s| s.source == "urlhaus" && s.verdict == Some(Verdict::Clean)));
-    assert_eq!(ip.sources.len(), 3);
+    assert_eq!(
+        ip.sources
+            .iter()
+            .filter(|source| source.status == SourceStatus::Ok)
+            .count(),
+        3
+    );
 
     let domain = reports
         .iter()
@@ -110,7 +134,30 @@ async fn combines_three_providers_without_leaking_the_key() {
 
 #[tokio::test]
 async fn missing_keys_skip_and_exit_3() {
-    let cfg = Config::from_toml_with_env("", None, &HashMap::new()).unwrap();
+    let cfg = Config::from_toml_with_env(
+        r#"
+        [profiles.default.cache]
+        enabled = false
+
+        [profiles.default.providers.openphish]
+        enabled = false
+
+        [profiles.default.providers.spamhaus-zen]
+        enabled = false
+
+        [profiles.default.providers.spamhaus-dbl]
+        enabled = false
+
+        [profiles.default.providers.rdap]
+        enabled = false
+
+        [profiles.default.providers.whois]
+        enabled = false
+        "#,
+        None,
+        &HashMap::new(),
+    )
+    .unwrap();
     let engine = Engine::from_config(&cfg).unwrap();
     assert!(engine
         .skip_notices()
