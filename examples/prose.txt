@@ -1,0 +1,3 @@
+Alert from the sinkhole: host evil.example talked to 192.0.2.1 and hxxps://bad[.]example/login.
+Reporter a(at)example.com attached e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855.
+ASN AS13335. Ignore the attachment report.pdf.
