@@ -7,8 +7,14 @@
 
 mod abuseipdb;
 mod audit;
+mod email;
+mod evidence;
+mod netcraft;
+mod template;
 mod threatfox;
 mod urlhaus;
+
+pub use evidence::write_evidence_pack;
 
 pub use abuseipdb::AbuseIpdbReporter;
 pub use threatfox::ThreatFoxReporter;
@@ -37,6 +43,8 @@ pub enum ReportPlan {
     Ready {
         /// Request body.
         payload: String,
+        /// Dedupe key. Usually the reporter id. Email uses `email:` plus the recipient.
+        destination: String,
     },
     /// The type is in scope, but this value cannot be submitted.
     Skip {
@@ -58,6 +66,12 @@ pub trait Reporter: Send + Sync {
 
     /// Build the body. No network.
     fn prepare(&self, ioc: &Ioc) -> ReportPlan;
+
+    /// Build the body. The default calls [`prepare`](Reporter::prepare).
+    /// Reporters that must look up a contact first override this.
+    async fn plan(&self, ioc: &Ioc) -> Result<ReportPlan, ProviderError> {
+        Ok(self.prepare(ioc))
+    }
 
     /// Send a body from [`prepare`](Reporter::prepare). The returned text is stored redacted.
     async fn send(&self, ioc: &Ioc, payload: &str) -> Result<String, ProviderError>;
@@ -148,7 +162,8 @@ impl ReportEngine {
         })
     }
 
-    /// AbuseIPDB, URLhaus and ThreatFox. Missing keys and disabled reporters are notices.
+    /// Built-in reporters. Missing keys, a missing Netcraft contact and a missing
+    /// mail setup are notices, not errors.
     pub fn from_config(cfg: &Config) -> Result<Self, Error> {
         let client = http_client(cfg.timeout)?;
         let mut notices = Vec::new();
@@ -156,7 +171,9 @@ impl ReportEngine {
         for built in [
             abuseipdb::build(cfg, client.clone()),
             urlhaus::build(cfg, client.clone()),
-            threatfox::build(cfg, client),
+            threatfox::build(cfg, client.clone()),
+            netcraft::build(cfg, client.clone()),
+            email::build(cfg, client),
         ] {
             match built {
                 Ok(reporter) => reporters.push(reporter),
@@ -323,29 +340,51 @@ async fn one(
     if !reporter.supports(ioc.kind) {
         return Ok(None);
     }
-    if audit.is_duplicate(reporter.id(), ioc)? {
-        let row = ReportRow::new(
-            reporter.id(),
-            ioc,
-            ReportStatus::Duplicate,
-            "",
-            "already submitted",
-        );
-        audit.record(&row, false)?;
-        return Ok(Some(row));
-    }
-    let payload = match reporter.prepare(ioc) {
+    let planned = match reporter.plan(ioc).await {
+        Ok(plan) => plan,
+        Err(err) => {
+            let row = ReportRow::new(
+                reporter.id(),
+                ioc,
+                ReportStatus::Error,
+                "",
+                &err.to_string(),
+            );
+            audit.record(&row, false)?;
+            return Ok(Some(row));
+        }
+    };
+    let (payload, destination) = match planned {
         ReportPlan::Unsupported => return Ok(None),
         ReportPlan::Skip { reason } => {
             let row = ReportRow::new(reporter.id(), ioc, ReportStatus::Skipped, "", &reason);
             audit.record(&row, false)?;
             return Ok(Some(row));
         }
-        ReportPlan::Ready { payload } => payload,
+        ReportPlan::Ready {
+            payload,
+            destination,
+        } => (payload, destination),
     };
+    let destination = if destination.is_empty() {
+        reporter.id().to_string()
+    } else {
+        destination
+    };
+    if audit.is_duplicate(&destination, ioc)? {
+        let row = ReportRow::new(
+            &destination,
+            ioc,
+            ReportStatus::Duplicate,
+            &payload,
+            "already submitted",
+        );
+        audit.record(&row, false)?;
+        return Ok(Some(row));
+    }
     if !submit {
         let row = ReportRow::new(
-            reporter.id(),
+            &destination,
             ioc,
             ReportStatus::DryRun,
             &payload,
@@ -357,7 +396,7 @@ async fn one(
     match reporter.send(ioc, &payload).await {
         Ok(response) => {
             let row = ReportRow::new(
-                reporter.id(),
+                &destination,
                 ioc,
                 ReportStatus::Submitted,
                 &payload,
@@ -368,7 +407,7 @@ async fn one(
         }
         Err(err) => {
             let row = ReportRow::new(
-                reporter.id(),
+                &destination,
                 ioc,
                 ReportStatus::Error,
                 &payload,
@@ -626,6 +665,8 @@ mod tests {
         assert!(notices.contains("skipped abuseipdb: missing api key"));
         assert!(notices.contains("skipped urlhaus: disabled"));
         assert!(notices.contains("skipped threatfox: missing api key"));
+        assert!(notices.contains("skipped netcraft: report.netcraft.email is not set"));
+        assert!(notices.contains("skipped email: report.email.from is not set"));
     }
 
     #[test]

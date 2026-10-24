@@ -85,6 +85,7 @@ impl Reporter for AbuseIpdbReporter {
         }
         ReportPlan::Ready {
             payload: redact(&body.finish(), &self.api_key),
+            destination: ABUSEIPDB_META.id.to_string(),
         }
     }
 
@@ -130,7 +131,7 @@ mod tests {
     fn payload_is_the_form_body_without_the_key() {
         let planned =
             reporter("https://api.abuseipdb.com").prepare(&parse_ioc("192.0.2.1").unwrap());
-        let ReportPlan::Ready { payload } = planned else {
+        let ReportPlan::Ready { payload, .. } = planned else {
             panic!("expected a payload");
         };
         assert!(payload.contains("ip=192.0.2.1"));
@@ -158,7 +159,7 @@ mod tests {
 
         let reporter = reporter(&server.uri());
         let ioc = parse_ioc("192.0.2.1").unwrap();
-        let ReportPlan::Ready { payload } = reporter.prepare(&ioc) else {
+        let ReportPlan::Ready { payload, .. } = reporter.prepare(&ioc) else {
             panic!("expected a payload");
         };
         let body = reporter.send(&ioc, &payload).await.unwrap();

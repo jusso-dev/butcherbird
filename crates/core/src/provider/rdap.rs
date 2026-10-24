@@ -35,6 +35,15 @@ pub const RDAP_META: ProviderMeta = ProviderMeta {
     default_rate_per_minute: 30,
 };
 
+/// Abuse mailbox found on an RDAP object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AbuseContact {
+    /// Mailbox, without a `mailto:` prefix.
+    pub email: String,
+    /// Registrar name when the record had one.
+    pub registrar: Option<String>,
+}
+
 /// RDAP client.
 pub struct Rdap {
     client: reqwest::Client,
@@ -71,6 +80,33 @@ impl Provider for Rdap {
     }
 
     async fn lookup(&self, ioc: &Ioc) -> Result<Finding, ProviderError> {
+        match self.fetch(ioc).await? {
+            Some(body) => Ok(map_body(&body)),
+            None => Ok(Finding {
+                verdict: Verdict::Unknown,
+                confidence: 0,
+                detail: "no rdap record".to_string(),
+            }),
+        }
+    }
+}
+
+impl Rdap {
+    /// Abuse mailbox for an indicator, if RDAP lists one.
+    pub(crate) async fn abuse_contact(
+        &self,
+        ioc: &Ioc,
+    ) -> Result<Option<AbuseContact>, ProviderError> {
+        let Some(body) = self.fetch(ioc).await? else {
+            return Ok(None);
+        };
+        let mut registrar = None;
+        let mut abuse = None;
+        walk(&body, &mut registrar, &mut abuse);
+        Ok(abuse.map(|email| AbuseContact { email, registrar }))
+    }
+
+    async fn fetch(&self, ioc: &Ioc) -> Result<Option<Value>, ProviderError> {
         let path = rdap_path(ioc);
         let url = format!("{}/{}", self.base_url.trim_end_matches('/'), path);
         let response = match http::send(&self.gate, &Secret::new(""), || {
@@ -81,17 +117,11 @@ impl Provider for Rdap {
         })
         .await
         {
-            Err(err) if is_not_found(&err) => {
-                return Ok(Finding {
-                    verdict: Verdict::Unknown,
-                    confidence: 0,
-                    detail: "no rdap record".to_string(),
-                });
-            }
+            Err(err) if is_not_found(&err) => return Ok(None),
             other => other?,
         };
         let body: Value = response.json().await.map_err(|_| ProviderError::Decode)?;
-        Ok(map_body(&body))
+        Ok(Some(body))
     }
 }
 

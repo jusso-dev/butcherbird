@@ -119,8 +119,12 @@ Clap uses its own status for `-h` and for flags it does not recognise.
 | `abuseipdb` | ipv4, ipv6 | `POST /api/v2/report`. Default category `15` (Hacking). |
 | `urlhaus` | url | Submit host is `https://urlhaus.abuse.ch` unless `providers.urlhaus.base_url` is set. |
 | `threatfox` | url, domain, md5, sha256 | Bare IPv4 and SHA-1 are skipped. The API wants `ip:port`, and this tool does not invent a port. |
+| `netcraft` | url | Needs `report.netcraft.email`. Sandbox is the default (`/api/v3/test/report/urls`). Set `sandbox = false` for a live report. |
+| `email` | ipv4, ipv6, domain, url | Needs `report.email.from` and either `smtp_host` or `http_url`. The recipient comes from RDAP. A dry run still queries RDAP and does not send the mail. |
 
-A missing key skips that reporter. The same indicator is not sent twice to the same destination. Failed submits are not remembered, so a later run can retry. Every attempt is appended to `report_audit` in the cache SQLite file. The lookup cache can be off. The audit file is still that path. Stored payloads do not include API keys.
+A missing key skips that reporter. The same indicator is not sent twice to the same destination. Mail is deduped per recipient (`email:abuse@example.com`). Failed submits are not remembered, so a later run can retry. Every attempt is appended to `report_audit` in the cache SQLite file. The lookup cache can be off. The audit file is still that path. Stored payloads do not include API keys or mail tokens.
+
+Each report run also writes a local evidence pack (`evidence.md`, `evidence.csv`, `evidence.pdf`) to `butcherbird-evidence`. The pack is for ReportCyber, Scamwatch, IC3, Report Fraud (which replaced Action Fraud) and the Google Safe Browsing phishing form. Butcherbird does not submit those. `--submit` does not send the pack. `report.evidence.enabled = false` turns it off. If the pack is written and no networked reporter is configured, the command exits 0.
 
 ```sh
 butcherbird report examples/iocs.txt
@@ -129,8 +133,8 @@ butcherbird report examples/iocs.txt --submit --yes --output json
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Dry run or submit finished, no submit error |
-| 3 | Bad config or input, confirmation refused, or no reporter ran |
+| 0 | Dry run or submit finished with no submit error, or only a local evidence pack was written |
+| 3 | Bad config or input, confirmation refused, or no reporter ran and evidence is off |
 | 4 | At least one submit failed |
 
 ## Tests

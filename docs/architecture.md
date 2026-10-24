@@ -59,7 +59,11 @@ Lookups send indicators to the providers that run. See [responsible use](respons
 | `abuseipdb` | ipv4, ipv6 | `POST {base}/api/v2/report` form `ip`, `categories` |
 | `urlhaus` | url | `POST {base}/api/` JSON submission. Default base is `https://urlhaus.abuse.ch`, not the lookup host. A configured `base_url` is used for both. |
 | `threatfox` | url, domain, md5, sha256 | `POST {base}/api/v1/` JSON `submit_ioc`. IPv4 and SHA-1 produce a skipped row. |
+| `netcraft` | url | `POST {base}/api/v3/report/urls`. `sandbox` (the default) uses `/api/v3/test/report/urls`. Body is the contact email and one URL. No API key is sent. |
+| `email` | ipv4, ipv6, domain, url | RDAP abuse contact, then SMTP or `POST` JSON `{to,subject,body}`. Dedupe key is `email:` plus the recipient. |
 
-A successful submit writes `report_dedupe` and `report_audit` in one transaction, inside the cache SQLite file. The dedupe key is destination, type and value. Dry runs, skips and errors are audited and do not take a dedupe slot. The audit stores the payload and the response after key redaction.
+A successful submit writes `report_dedupe` and `report_audit` in one transaction, inside the cache SQLite file. The dedupe key is destination, type and value. For mail, the destination is the recipient, so the same indicator can go to two different abuse addresses. Dry runs, skips and errors are audited and do not take a dedupe slot. The audit stores the payload and the response after key redaction.
 
-Google Safe Browsing phishing reports, Netcraft, abuse email and authority evidence packs are later milestones.
+Abuse mail calls `plan` before the dedupe check, so a dry run and a duplicate both query RDAP. The rendered message is not handed to SMTP or to the HTTP mail API unless `--submit` is set. No abuse contact is a skipped row.
+
+`butcherbird report` also writes `evidence.md`, `evidence.csv` and `evidence.pdf` under `report.evidence.dir` (default `butcherbird-evidence`). The pack lists ReportCyber, Scamwatch, IC3, Report Fraud (the service that replaced Action Fraud) and the Google Safe Browsing phishing form. Those destinations have no submit call in this tool. `--submit` does not send the pack. Set `report.evidence.enabled = false` to skip it. A Handlebars file of the same name in `report.templates_dir` replaces `abuse-email.hbs` or `evidence.md.hbs`. Use triple braces for values that must not be escaped.

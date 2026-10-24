@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use butcherbird_core::{
-    exit_code, load_iocs, render, render_reports, report_exit_code, Config, Engine, Error,
-    InputFormat, OutputFormat, ReportEngine,
+    exit_code, load_iocs, render, render_reports, report_exit_code, write_evidence_pack, Config,
+    Engine, Error, InputFormat, OutputFormat, ReportEngine,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
@@ -184,7 +184,25 @@ async fn run_report(args: ReportArgs) -> Result<i32, Error> {
     for notice in engine.notices() {
         eprintln!("butcherbird: {notice}");
     }
+    let wrote_pack = if config.report.evidence_enabled {
+        write_evidence_pack(
+            &config.report.evidence_dir,
+            config.report.templates_dir.as_deref(),
+            &iocs,
+        )?;
+        eprintln!(
+            "butcherbird: evidence pack written to {} (not submitted)",
+            config.report.evidence_dir.display()
+        );
+        true
+    } else {
+        false
+    };
     if !engine.has_reporters() {
+        if wrote_pack {
+            eprintln!("butcherbird: no networked reporter ran");
+            return Ok(0);
+        }
         eprintln!("butcherbird: no reporter ran");
         return Ok(3);
     }

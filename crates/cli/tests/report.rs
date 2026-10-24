@@ -15,6 +15,9 @@ const ENV_KEYS: &[&str] = &[
     "THREATFOX_AUTH_KEY",
     "MALWAREBAZAAR_AUTH_KEY",
     "SAFEBROWSING_API_KEY",
+    "BUTCHERBIRD_SMTP_USERNAME",
+    "BUTCHERBIRD_SMTP_PASSWORD",
+    "BUTCHERBIRD_MAIL_TOKEN",
     "BUTCHERBIRD_CONFIG",
     "BUTCHERBIRD_PROFILE",
     "RUST_LOG",
@@ -88,8 +91,13 @@ async fn dry_run_then_submit_once() {
         .assert()
         .code(0);
     let stdout = String::from_utf8_lossy(&dry.get_output().stdout);
+    let stderr = String::from_utf8_lossy(&dry.get_output().stderr);
     assert!(!stdout.contains("secret-key"), "{stdout}");
     assert!(stdout.contains("dry_run"), "{stdout}");
+    assert!(stderr.contains("not submitted"), "{stderr}");
+    let pack = std::fs::read(dir.path().join("butcherbird-evidence").join("evidence.pdf")).unwrap();
+    assert!(pack.starts_with(b"%PDF"));
+    assert!(pack.windows(9).any(|window| window == b"192.0.2.1"));
     assert!(
         server.received_requests().await.unwrap().is_empty(),
         "dry run must not submit"

@@ -3,6 +3,7 @@
 # ABUSEIPDB_API_KEY, URLHAUS_AUTH_KEY, VIRUSTOTAL_API_KEY, OTX_API_KEY,
 # GREYNOISE_API_KEY, SHODAN_API_KEY, URLSCAN_API_KEY, THREATFOX_AUTH_KEY,
 # MALWAREBAZAAR_AUTH_KEY, SAFEBROWSING_API_KEY
+# Mail: BUTCHERBIRD_SMTP_USERNAME, BUTCHERBIRD_SMTP_PASSWORD, BUTCHERBIRD_MAIL_TOKEN
 # OpenPhish, Spamhaus, RDAP and WHOIS do not take a key.
 
 profile = "default"
@@ -80,3 +81,25 @@ categories = "15"
 threat_type = "payload_delivery"
 malware = "unknown"
 confidence_level = 50
+
+# Netcraft sandbox is the default. Set sandbox = false only for a real report.
+# email is the contact Netcraft writes back to. Empty skips the reporter.
+[profiles.default.report.netcraft]
+sandbox = true
+reason = "Reported by Butcherbird"
+
+# Abuse mail uses the RDAP abuse contact. Set from, and either smtp_host or http_url.
+# A dry run still queries RDAP. It does not connect to SMTP or POST the mail.
+# [profiles.default.report.email]
+# from = "reports@example.com"
+# smtp_host = "smtp.example.com"
+# smtp_port = 587
+# smtp_starttls = true
+
+# Local pack for portals that have no submit API. Not sent, even with --submit.
+[profiles.default.report.evidence]
+enabled = true
+dir = "butcherbird-evidence"
+
+# Drop a file of the same name here to replace one built-in template.
+# templates_dir = "templates"

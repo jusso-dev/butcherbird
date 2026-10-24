@@ -81,6 +81,7 @@ impl Reporter for UrlhausReporter {
         });
         ReportPlan::Ready {
             payload: redact(&body.to_string(), &self.api_key),
+            destination: URLHAUS_META.id.to_string(),
         }
     }
 
@@ -128,7 +129,7 @@ mod tests {
             60_000,
         );
         let ioc = parse_ioc("https://phish.example/login").unwrap();
-        let ReportPlan::Ready { payload } = reporter.prepare(&ioc) else {
+        let ReportPlan::Ready { payload, .. } = reporter.prepare(&ioc) else {
             panic!("expected a payload");
         };
         assert!(!payload.contains("secret-key"));
