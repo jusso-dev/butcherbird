@@ -1,0 +1,25 @@
+[package]
+name = "butcherbird-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Python bindings for the Butcherbird core"
+publish = false
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+butcherbird-core.workspace = true
+pyo3 = { version = "0.30.1", features = ["abi3-py39"] }
+tokio.workspace = true
+
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+all = { level = "warn" }

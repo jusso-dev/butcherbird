@@ -4,7 +4,7 @@
 
 Butcherbird checks indicators of compromise (IPs, domains, URLs, file hashes, email addresses, ASNs) against threat-intel sources and returns one verdict per indicator.
 
-`butcherbird check` parses indicators and looks them up across the sources in [docs/architecture.md](docs/architecture.md). Successful lookups are cached in SQLite. `butcherbird report` can submit the malicious ones to AbuseIPDB, URLhaus and ThreatFox. It is a dry run unless you pass `--submit`. The Python and C# bindings are not built yet.
+`butcherbird check` parses indicators and looks them up across the sources in [docs/architecture.md](docs/architecture.md). Successful lookups are cached in SQLite. `butcherbird report` can submit the malicious ones to AbuseIPDB, URLhaus, ThreatFox and Netcraft, and it can mail the RDAP abuse contact. It is a dry run unless you pass `--submit`. The Python package is in [bindings/python](bindings/python/README.md). The C# binding is not built yet.
 
 Lookups send indicators to those providers. Read [docs/responsible-use.md](docs/responsible-use.md) before you point it at real data.
 
