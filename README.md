@@ -4,7 +4,7 @@
 
 Butcherbird checks indicators of compromise (IPs, domains, URLs, file hashes, email addresses, ASNs) against threat-intel sources and returns one verdict per indicator.
 
-`butcherbird check` parses indicators and looks them up across the sources in [docs/architecture.md](docs/architecture.md). Successful lookups are cached in SQLite. Reporting, and the Python and C# bindings, are not built yet.
+`butcherbird check` parses indicators and looks them up across the sources in [docs/architecture.md](docs/architecture.md). Successful lookups are cached in SQLite. `butcherbird report` can submit the malicious ones to AbuseIPDB, URLhaus and ThreatFox. It is a dry run unless you pass `--submit`. The Python and C# bindings are not built yet.
 
 Lookups send indicators to those providers. Read [docs/responsible-use.md](docs/responsible-use.md) before you point it at real data.
 
@@ -66,6 +66,17 @@ ttl_secs = 86400
 [profiles.default.providers.virustotal]
 api_key_env = "VIRUSTOTAL_API_KEY"
 rate_per_minute = 4
+
+[profiles.default.report]
+yes = false
+
+[profiles.default.report.abuseipdb]
+categories = "15"
+
+[profiles.default.report.threatfox]
+threat_type = "payload_delivery"
+malware = "unknown"
+confidence_level = 50
 ```
 
 OpenPhish, Spamhaus ZEN, Spamhaus DBL, RDAP and WHOIS do not take a key. Set `enabled = false` on a provider to skip it. The cache file defaults to `$XDG_CACHE_HOME/butcherbird/cache.sqlite` or `~/.cache/butcherbird/cache.sqlite`.
@@ -98,6 +109,29 @@ Defanged forms that are understood: `hxxp` / `hxxps`, `[.]` `(.)` `{.}` `[dot]` 
 | 4 | Every lookup failed |
 
 Clap uses its own status for `-h` and for flags it does not recognise.
+
+## Reporting
+
+`butcherbird report` plans one submission per indicator a reporter accepts. The default is a dry run: the payload is printed and written to the audit log, and nothing is sent. A later `--submit` can still send it. `--submit` asks you to type `yes` unless you also pass `--yes` or set `report.yes = true`. `report.yes` does not submit on its own.
+
+| Destination | Indicators | Notes |
+| --- | --- | --- |
+| `abuseipdb` | ipv4, ipv6 | `POST /api/v2/report`. Default category `15` (Hacking). |
+| `urlhaus` | url | Submit host is `https://urlhaus.abuse.ch` unless `providers.urlhaus.base_url` is set. |
+| `threatfox` | url, domain, md5, sha256 | Bare IPv4 and SHA-1 are skipped. The API wants `ip:port`, and this tool does not invent a port. |
+
+A missing key skips that reporter. The same indicator is not sent twice to the same destination. Failed submits are not remembered, so a later run can retry. Every attempt is appended to `report_audit` in the cache SQLite file. The lookup cache can be off. The audit file is still that path. Stored payloads do not include API keys.
+
+```sh
+butcherbird report examples/iocs.txt
+butcherbird report examples/iocs.txt --submit --yes --output json
+```
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Dry run or submit finished, no submit error |
+| 3 | Bad config or input, confirmation refused, or no reporter ran |
+| 4 | At least one submit failed |
 
 ## Tests
 

@@ -92,8 +92,10 @@ pub struct Config {
     pub max_concurrency: usize,
     /// Per-request HTTP timeout.
     pub timeout: Duration,
-    /// Local SQLite cache of successful lookups.
+    /// Local SQLite cache of successful lookups. The same file holds the report audit.
     pub cache: CacheSettings,
+    /// Abuse-report defaults. `yes` only skips the submit prompt.
+    pub report: ReportSettings,
     providers: BTreeMap<String, ProviderSettings>,
 }
 
@@ -106,6 +108,23 @@ pub struct CacheSettings {
     pub path: PathBuf,
     /// How long a stored finding is reused.
     pub ttl: Duration,
+}
+
+/// Defaults for `butcherbird report`.
+#[derive(Debug, Clone)]
+pub struct ReportSettings {
+    /// When true, `--submit` does not prompt. It does not submit by itself.
+    pub yes: bool,
+    /// AbuseIPDB category ids, comma-separated. Default `15` (Hacking).
+    pub abuseipdb_categories: String,
+    /// Optional AbuseIPDB comment. Empty omits the field.
+    pub abuseipdb_comment: String,
+    /// ThreatFox `threat_type`. Default `payload_delivery`.
+    pub threatfox_threat_type: String,
+    /// ThreatFox malware family label. Default `unknown`.
+    pub threatfox_malware: String,
+    /// ThreatFox confidence, 0–100. Default 50.
+    pub threatfox_confidence: u8,
 }
 
 /// One provider's resolved settings.
@@ -175,6 +194,7 @@ impl Config {
             max_concurrency,
             timeout: Duration::from_secs(timeout_secs),
             cache: resolve_cache(profile_file.cache.as_ref()),
+            report: resolve_report(profile_file.report.as_ref())?,
             providers,
         })
     }
@@ -196,6 +216,7 @@ impl fmt::Debug for Config {
             .field("cache_enabled", &self.cache.enabled)
             .field("cache_path", &self.cache.path)
             .field("cache_ttl", &self.cache.ttl)
+            .field("report_yes", &self.report.yes)
             .field("providers", &self.providers)
             .finish()
     }
@@ -242,6 +263,64 @@ fn resolve_provider(
         base_url: raw.base_url,
         rate_per_minute: raw.rate_per_minute,
     })
+}
+
+fn resolve_report(raw: Option<&ReportFile>) -> Result<ReportSettings, Error> {
+    let raw = raw.cloned().unwrap_or_default();
+    let abuse = raw.abuseipdb.unwrap_or_default();
+    let fox = raw.threatfox.unwrap_or_default();
+    let confidence = fox.confidence_level.unwrap_or(50);
+    if confidence > 100 {
+        return Err(Error::Config(format!(
+            "threatfox confidence_level {confidence} is above 100"
+        )));
+    }
+    let threat_type = fox
+        .threat_type
+        .unwrap_or_else(|| "payload_delivery".to_string());
+    let malware = fox.malware.unwrap_or_else(|| "unknown".to_string());
+    if threat_type.trim().is_empty() || malware.trim().is_empty() {
+        return Err(Error::Config(
+            "threatfox threat_type and malware must be set".into(),
+        ));
+    }
+    let comment = abuse.comment.unwrap_or_default();
+    if comment.chars().count() > 1024 {
+        return Err(Error::Config(
+            "abuseipdb comment is longer than 1024 characters".into(),
+        ));
+    }
+    Ok(ReportSettings {
+        yes: raw.yes.unwrap_or(false),
+        abuseipdb_categories: normalise_categories(abuse.categories.as_deref().unwrap_or("15"))?,
+        abuseipdb_comment: comment,
+        threatfox_threat_type: threat_type,
+        threatfox_malware: malware,
+        threatfox_confidence: confidence,
+    })
+}
+
+fn normalise_categories(value: &str) -> Result<String, Error> {
+    let mut ids = Vec::new();
+    for part in value.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let id: u16 = part
+            .parse()
+            .map_err(|_| Error::Config(format!("abuseipdb category `{part}` is not a number")))?;
+        if id == 0 {
+            return Err(Error::Config("abuseipdb category 0 is not valid".into()));
+        }
+        ids.push(id.to_string());
+    }
+    if ids.is_empty() {
+        return Err(Error::Config(
+            "abuseipdb categories must list at least one id".into(),
+        ));
+    }
+    Ok(ids.join(","))
 }
 
 fn resolve_cache(raw: Option<&CacheFile>) -> CacheSettings {
@@ -344,6 +423,8 @@ struct ProfileFile {
     #[serde(default)]
     cache: Option<CacheFile>,
     #[serde(default)]
+    report: Option<ReportFile>,
+    #[serde(default)]
     providers: BTreeMap<String, ProviderFile>,
 }
 
@@ -352,6 +433,28 @@ struct CacheFile {
     enabled: Option<bool>,
     path: Option<String>,
     ttl_secs: Option<u64>,
+}
+
+#[derive(Clone, Deserialize, Default)]
+struct ReportFile {
+    yes: Option<bool>,
+    #[serde(default)]
+    abuseipdb: Option<AbuseReportFile>,
+    #[serde(default)]
+    threatfox: Option<ThreatFoxReportFile>,
+}
+
+#[derive(Clone, Deserialize, Default)]
+struct AbuseReportFile {
+    categories: Option<String>,
+    comment: Option<String>,
+}
+
+#[derive(Clone, Deserialize, Default)]
+struct ThreatFoxReportFile {
+    threat_type: Option<String>,
+    malware: Option<String>,
+    confidence_level: Option<u8>,
 }
 
 #[derive(Clone, Deserialize, Default)]
@@ -459,5 +562,45 @@ mod tests {
             cfg.provider("otx").api_key.as_ref().unwrap().masked(),
             "otx-****"
         );
+        assert!(!cfg.report.yes);
+        assert_eq!(cfg.report.abuseipdb_categories, "15");
+        assert_eq!(cfg.report.threatfox_confidence, 50);
+    }
+
+    #[test]
+    fn report_settings_parse_and_reject_bad_categories() {
+        let cfg = Config::from_toml_with_env(
+            r#"
+            [profiles.default.report]
+            yes = true
+
+            [profiles.default.report.abuseipdb]
+            categories = "15, 18"
+
+            [profiles.default.report.threatfox]
+            threat_type = "botnet_cc"
+            malware = "win.emotet"
+            confidence_level = 75
+            "#,
+            None,
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert!(cfg.report.yes);
+        assert_eq!(cfg.report.abuseipdb_categories, "15,18");
+        assert_eq!(cfg.report.threatfox_threat_type, "botnet_cc");
+        assert_eq!(cfg.report.threatfox_malware, "win.emotet");
+        assert_eq!(cfg.report.threatfox_confidence, 75);
+
+        let err = Config::from_toml_with_env(
+            r#"
+            [profiles.default.report.abuseipdb]
+            categories = "nope"
+            "#,
+            None,
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("not a number"));
     }
 }

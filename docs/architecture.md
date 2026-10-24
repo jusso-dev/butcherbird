@@ -3,8 +3,8 @@
 Butcherbird is a Rust workspace. The library owns every decision about indicators. The CLI is a thin caller. Later Python and C# packages will call the same library and will not reimplement parsing, scoring or reporting.
 
 ```
-crates/core    butcherbird-core   parsing, providers, scoring, output
-crates/cli     butcherbird        `butcherbird check`
+crates/core    butcherbird-core   parsing, providers, scoring, reporting, output
+crates/cli     butcherbird        `butcherbird check`, `butcherbird report`
 ```
 
 Planned, not in this tree yet:
@@ -48,4 +48,18 @@ bindings/dotnet      P/Invoke and a .NET 8 wrapper
 
 Shodan, RDAP and WHOIS are contact or exposure data. Their rows stay `unknown` unless Shodan reports a malware tag, a honeypot, or a vulnerability. OpenPhish and OTX treat "not seen" as `unknown`, not clean. Safe Browsing's empty match list is a clean vote because that is what the API means.
 
-Reporting is a later milestone. Lookups already send indicators to the providers that run. See [responsible use](responsible-use.md).
+Lookups send indicators to the providers that run. See [responsible use](responsible-use.md).
+
+## Reporting
+
+`Reporter` is the extension point for outbound reports. `butcherbird report` is a dry run unless `--submit` is set. `--submit` asks for confirmation unless `--yes` is passed or `report.yes` is true. `report.yes` only skips the prompt.
+
+| Id | Types | Request |
+| --- | --- | --- |
+| `abuseipdb` | ipv4, ipv6 | `POST {base}/api/v2/report` form `ip`, `categories` |
+| `urlhaus` | url | `POST {base}/api/` JSON submission. Default base is `https://urlhaus.abuse.ch`, not the lookup host. A configured `base_url` is used for both. |
+| `threatfox` | url, domain, md5, sha256 | `POST {base}/api/v1/` JSON `submit_ioc`. IPv4 and SHA-1 produce a skipped row. |
+
+A successful submit writes `report_dedupe` and `report_audit` in one transaction, inside the cache SQLite file. The dedupe key is destination, type and value. Dry runs, skips and errors are audited and do not take a dedupe slot. The audit stores the payload and the response after key redaction.
+
+Google Safe Browsing phishing reports, Netcraft, abuse email and authority evidence packs are later milestones.

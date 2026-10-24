@@ -1,7 +1,7 @@
-//! Indicator parsing, enrichment, caching and scoring for Butcherbird.
+//! Indicator parsing, enrichment, caching, scoring and reporting for Butcherbird.
 //!
-//! Lookups send indicators to third-party services. Reporting lives in later
-//! crates and is dry-run unless a caller opts in.
+//! Lookups and reports send indicators to third-party services. Reports are
+//! dry-run unless the caller opts in.
 
 #![forbid(unsafe_code)]
 
@@ -12,6 +12,7 @@ pub mod enrich;
 pub mod ioc;
 pub mod output;
 pub mod provider;
+pub mod report;
 pub mod score;
 pub mod secret;
 
@@ -20,6 +21,7 @@ pub use enrich::{exit_code, Engine, IocReport};
 pub use ioc::{extract_iocs, load_iocs, parse_ioc, InputFormat, Ioc, IocType};
 pub use output::{render, OutputFormat};
 pub use provider::{AuthKind, Provider, ProviderError, ProviderMeta, Slot, Tier};
+pub use report::{render_reports, report_exit_code, ReportEngine, ReportRow, ReportStatus};
 pub use score::{Finding, SourceReport, SourceStatus, Verdict};
 pub use secret::Secret;
 

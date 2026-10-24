@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "IoC parsing, enrichment and scoring for Butcherbird"
+description = "IoC parsing, enrichment, scoring and reporting for Butcherbird"
 categories = ["api-bindings"]
 keywords = ["threat-intelligence", "ioc", "security"]
 
