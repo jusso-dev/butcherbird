@@ -31,6 +31,8 @@ pub use urlscan::{Urlscan, URLSCAN_META};
 pub use virustotal::{VirusTotal, VIRUSTOTAL_META};
 pub use whois::{Whois, WHOIS_META};
 
+pub(crate) use http::{client as http_client, send as http_send, IntervalGate};
+
 use std::sync::Arc;
 
 use async_trait::async_trait;

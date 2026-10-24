@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use butcherbird_core::{
-    exit_code, load_iocs, render, Config, Engine, Error, InputFormat, OutputFormat,
+    exit_code, load_iocs, render, render_reports, report_exit_code, Config, Engine, Error,
+    InputFormat, OutputFormat, ReportEngine,
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
@@ -24,6 +25,8 @@ struct Cli {
 enum Command {
     /// Check indicators against threat-intel providers.
     Check(CheckArgs),
+    /// Plan or submit abuse reports. Dry run unless `--submit`.
+    Report(ReportArgs),
 }
 
 #[derive(Args)]
@@ -48,6 +51,36 @@ struct CheckArgs {
     /// Log provider lookups on stderr. Indicators are included. Keys are not.
     #[arg(long)]
     verbose: bool,
+}
+
+#[derive(Args)]
+struct ReportArgs {
+    /// Input file. Omit, or pass `-`, to read stdin.
+    input: Option<PathBuf>,
+    /// How to parse the input.
+    #[arg(long, value_enum, default_value = "auto")]
+    input_format: InputArg,
+    /// Report format written to stdout or `--out-file`.
+    #[arg(long, value_enum, default_value = "table")]
+    output: OutputArg,
+    /// Write the report to this file instead of stdout.
+    #[arg(long)]
+    out_file: Option<PathBuf>,
+    /// Config file. Default: ./butcherbird.toml, then the user config dir.
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// Profile inside the config file.
+    #[arg(long)]
+    profile: Option<String>,
+    /// Log report attempts on stderr. Indicators are included. Keys are not.
+    #[arg(long)]
+    verbose: bool,
+    /// Send reports. Without this flag, nothing is submitted.
+    #[arg(long)]
+    submit: bool,
+    /// Skip the confirmation prompt. Does nothing unless `--submit` is set.
+    #[arg(long)]
+    yes: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -95,13 +128,18 @@ impl OutputArg {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Command::Check(args) => match run_check(args) {
-            Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(4)),
-            Err(err) => {
-                eprintln!("butcherbird: {err}");
-                ExitCode::from(error_code(&err))
-            }
-        },
+        Command::Check(args) => finish(run_check(args)),
+        Command::Report(args) => finish(run_report(args)),
+    }
+}
+
+fn finish(result: Result<i32, Error>) -> ExitCode {
+    match result {
+        Ok(code) => ExitCode::from(u8::try_from(code).unwrap_or(4)),
+        Err(err) => {
+            eprintln!("butcherbird: {err}");
+            ExitCode::from(error_code(&err))
+        }
     }
 }
 
@@ -130,6 +168,59 @@ async fn run_check(args: CheckArgs) -> Result<i32, Error> {
     let rendered = render(&reports, args.output.into_format());
     write_report(&rendered, args.out_file.as_deref())?;
     Ok(exit_code(&reports))
+}
+
+#[tokio::main]
+async fn run_report(args: ReportArgs) -> Result<i32, Error> {
+    init_tracing(args.verbose);
+    let config = Config::load(args.config.as_deref(), args.profile.as_deref())?;
+    let text = read_input(args.input.as_deref())?;
+    let iocs = load_iocs(&text, args.input_format.into_format())?;
+    if iocs.is_empty() {
+        eprintln!("butcherbird: no indicators found");
+        return Ok(3);
+    }
+    let engine = ReportEngine::from_config(&config)?;
+    for notice in engine.notices() {
+        eprintln!("butcherbird: {notice}");
+    }
+    if !engine.has_reporters() {
+        eprintln!("butcherbird: no reporter ran");
+        return Ok(3);
+    }
+    let submit = if args.submit {
+        confirm_submit(args.yes || config.report.yes)?;
+        eprintln!("butcherbird: submitting reports");
+        true
+    } else {
+        eprintln!("butcherbird: dry run, nothing will be submitted");
+        false
+    };
+    let rows = engine.run(&iocs, submit).await?;
+    let rendered = render_reports(&rows, args.output.into_format())?;
+    write_report(&rendered, args.out_file.as_deref())?;
+    Ok(report_exit_code(&rows))
+}
+
+fn confirm_submit(skip_prompt: bool) -> Result<(), Error> {
+    if skip_prompt {
+        return Ok(());
+    }
+    if !io::stdin().is_terminal() {
+        return Err(Error::Config(
+            "refusing to submit without confirmation. Pass --yes, or set report.yes, when stdin is not a terminal.".into(),
+        ));
+    }
+    eprint!("Type yes to submit reports: ");
+    let _ = io::stderr().flush();
+    let mut line = String::new();
+    io::stdin()
+        .read_line(&mut line)
+        .map_err(|err| Error::Input(butcherbird_core::ioc::InputError::Read(err.to_string())))?;
+    if line.trim() != "yes" {
+        return Err(Error::Config("submission cancelled".into()));
+    }
+    Ok(())
 }
 
 fn read_input(path: Option<&std::path::Path>) -> Result<String, Error> {

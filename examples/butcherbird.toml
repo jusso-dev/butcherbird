@@ -69,3 +69,14 @@ rate_per_minute = 30
 
 [profiles.default.providers.whois]
 rate_per_minute = 10
+
+[profiles.default.report]
+yes = false
+
+[profiles.default.report.abuseipdb]
+categories = "15"
+
+[profiles.default.report.threatfox]
+threat_type = "payload_delivery"
+malware = "unknown"
+confidence_level = 50

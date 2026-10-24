@@ -20,7 +20,9 @@ A URL with a username or password is stripped before it is stored as the indicat
 
 A verdict is a summary of what those providers returned. It can be wrong. `clean` means the providers that answered did not flag the indicator. It does not mean the indicator is safe. `unknown` means nothing voted. One automated result is not a reason to block a person or to accuse them.
 
-This version only looks indicators up. It does not report them anywhere. When reporting arrives, it will be dry-run unless you explicitly submit. False-positive reports waste responder time and can harm someone who is not attacking you. Confirm before you send.
+`butcherbird report` is a dry run unless you pass `--submit`. A report tells AbuseIPDB, URLhaus or ThreatFox that the indicator is malicious. Those services may act on it. False reports waste responder time and can harm someone who is not attacking you. Submit only indicators you have checked. `--yes` and `report.yes` skip the confirmation prompt. They do not review the indicator for you.
+
+The audit log stores the payload and the response, with API keys masked. Category `15` (Hacking) is the AbuseIPDB default. Change `report.abuseipdb.categories` when that category is wrong.
 
 ## Fixtures
 
