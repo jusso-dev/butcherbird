@@ -1,0 +1,134 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+# Tag builds publish GitHub release files. crates.io, PyPI and NuGet run
+# only when the matching secret is set:
+# CARGO_REGISTRY_TOKEN, PYPI_API_TOKEN, NUGET_API_KEY.
+# A failed registry publish does not skip the GitHub release.
+# Bump the workspace version, the Python version and the .NET version
+# before the tag. These jobs stay on GitHub-hosted runners because each
+# one produces a different operating system artifact.
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            rid: linux-x64
+            native: libbutcherbird_ffi.so
+            cli: butcherbird
+            asset: butcherbird-linux-x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            rid: osx-arm64
+            native: libbutcherbird_ffi.dylib
+            cli: butcherbird
+            asset: butcherbird-osx-arm64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rid: win-x64
+            native: butcherbird_ffi.dll
+            cli: butcherbird.exe
+            asset: butcherbird-win-x64.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: cli and C ABI
+        run: cargo build -p butcherbird -p butcherbird-ffi --release --locked --target ${{ matrix.target }}
+      - name: stage native library
+        shell: bash
+        run: |
+          mkdir -p "native/${{ matrix.rid }}" dist-cli
+          cp "target/${{ matrix.target }}/release/${{ matrix.native }}" "native/${{ matrix.rid }}/${{ matrix.native }}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.cli }}" "dist-cli/${{ matrix.asset }}"
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: bindings/python
+          target: ${{ matrix.target }}
+          manylinux: "2_28"
+          args: --release --locked --out dist --compatibility pypi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.rid }}
+          path: dist-cli/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.rid }}
+          path: native/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.rid }}
+          path: bindings/python/dist/*.whl
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+      MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+      NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: layout NuGet native assets
+        shell: bash
+        run: |
+          root="bindings/dotnet/Butcherbird/runtimes"
+          mkdir -p dist/wheels
+          for rid in linux-x64 osx-arm64 win-x64; do
+            mkdir -p "$root/$rid/native"
+            cp -a "artifacts/native-$rid/$rid/." "$root/$rid/native/"
+            cp artifacts/wheel-"$rid"/*.whl dist/wheels/
+          done
+      - name: pack NuGet
+        run: dotnet pack bindings/dotnet/Butcherbird/Butcherbird.csproj -c Release -o dist/nuget
+      - name: publish crates
+        if: env.CARGO_REGISTRY_TOKEN != ''
+        run: |
+          cargo publish -p butcherbird-core --locked
+          ok=0
+          for _ in 1 2 3 4 5 6; do
+            if cargo publish -p butcherbird --locked; then
+              ok=1
+              break
+            fi
+            sleep 20
+          done
+          test "$ok" = 1
+      - name: publish wheels
+        if: env.PYPI_API_TOKEN != ''
+        uses: PyO3/maturin-action@v1
+        with:
+          command: upload
+          args: --non-interactive --skip-existing dist/wheels/*.whl
+      - name: publish NuGet
+        if: env.NUGET_API_KEY != ''
+        run: dotnet nuget push dist/nuget/*.nupkg --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+      - name: GitHub release
+        if: ${{ !cancelled() }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/cli-*/**
+            artifacts/wheel-*/*.whl
+            dist/nuget/*.nupkg

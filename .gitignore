@@ -13,6 +13,7 @@ bindings/python/**/*.pyd
 bindings/python/**/*.egg-info/
 bindings/dotnet/**/bin/
 bindings/dotnet/**/obj/
+bindings/dotnet/**/runtimes/
 .env
 .env.*
 !.env.example

@@ -22,6 +22,8 @@ A verdict is a summary of what those providers returned. It can be wrong. `clean
 
 `butcherbird report` is a dry run unless you pass `--submit`. A report tells AbuseIPDB, URLhaus, ThreatFox, Netcraft, or an abuse mailbox that the indicator is malicious. Those services may act on it. A false report wastes responder time and can harm someone who is not attacking you. Submit only indicators you have checked. `--yes` and `report.yes` skip the confirmation prompt. They do not review the indicator for you.
 
+The Python and C# packages do not prompt. `submit=True` in Python and `submit: true` in C# send the report. Confirm before you pass that flag.
+
 Netcraft stays on the documented test path until you set `report.netcraft.sandbox = false`. Abuse mail looks up RDAP even on a dry run, because the recipient is not known until that lookup returns. The message is not sent unless you pass `--submit`. `smtp_starttls = false` sends the mail in the clear. Leave STARTTLS on unless you are talking to a local relay on purpose.
 
 ReportCyber, Scamwatch, IC3, Report Fraud (the service that replaced Action Fraud) and the Google Safe Browsing phishing form are links in a local evidence pack. Butcherbird does not submit them. There is no Safe Browsing report API in this tool. Filing the pack yourself is still a report: a wrong indicator in that form has the same cost as a wrong API submit.
