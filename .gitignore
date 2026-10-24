@@ -4,6 +4,13 @@
 *.sqlite
 *.sqlite-*
 butcherbird-evidence/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+bindings/python/**/*.so
+bindings/python/**/*.pyd
+bindings/python/**/*.egg-info/
 .env
 .env.*
 !.env.example
