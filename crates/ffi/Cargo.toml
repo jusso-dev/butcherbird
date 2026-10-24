@@ -1,0 +1,32 @@
+[package]
+name = "butcherbird-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "C ABI for the Butcherbird core"
+publish = false
+
+[lib]
+name = "butcherbird_ffi"
+crate-type = ["cdylib"]
+
+[dependencies]
+butcherbird-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[build-dependencies]
+cbindgen = "0.28"
+
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+all = { level = "warn" }

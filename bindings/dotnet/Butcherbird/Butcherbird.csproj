@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Butcherbird</RootNamespace>
+    <AssemblyName>Butcherbird</AssemblyName>
+    <Version>0.1.0</Version>
+    <Authors>Justin Middler</Authors>
+    <Description>Threat-intel lookups and abuse reporting. Calls the Rust core.</Description>
+    <PackageLicenseExpression>MIT OR Apache-2.0</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/jusso-dev/butcherbird</RepositoryUrl>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+</Project>
