@@ -205,7 +205,8 @@ mod tests {
         assert_eq!(value["watch"]["kind"], "domain");
         assert_eq!(value["first_seen"], "2026-11-18T11:06:40Z");
         assert_eq!(value["recommended_actions"][0]["id"], "password_reset");
-        assert_eq!(value["event_id"].as_str().unwrap().len(), 32);
+        // Same id as the example in docs/leak-monitoring.md.
+        assert_eq!(value["event_id"], "c243f4fdfb81e66b26d3a2a7ebf2cef8");
 
         let again = LeakEvent::new(
             "hibp",

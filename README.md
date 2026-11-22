@@ -37,6 +37,7 @@ export URLSCAN_API_KEY=...
 export THREATFOX_AUTH_KEY=...
 export MALWAREBAZAAR_AUTH_KEY=...
 export SAFEBROWSING_API_KEY=...
+export HIBP_API_KEY=...   # leaks only
 
 butcherbird check examples/iocs.txt
 butcherbird check examples/prose.txt --output json
@@ -139,6 +140,27 @@ butcherbird report examples/iocs.txt --submit --yes --output json
 | 3 | Bad config or input, confirmation refused, or no reporter ran and evidence is off |
 | 4 | At least one submit failed |
 
+## Leak monitoring
+
+`butcherbird leaks` watches customer domains and named VIP email addresses for breaches reported by Have I Been Pwned (HIBP). Each exposure is shown once. A rerun with nothing new prints `(no new exposures)` and exits 0. It needs a paid HIBP key in `HIBP_API_KEY`, and each domain must be verified on that HIBP account. Without a key it skips with exit code 3.
+
+```toml
+[profiles.default.leaks]
+domains = ["example.com"]
+vips = ["ceo@example.net"]
+```
+
+```sh
+butcherbird leaks
+butcherbird leaks --vip cfo@example.net --output markdown
+butcherbird leaks --output ndjson >> leak-events.ndjson
+butcherbird leaks --all --dry-run
+```
+
+Output is a table, JSON, NDJSON or Markdown. Each exposure lists the address, the breach, when Butcherbird first reported it, and a generic reset path (password reset, session revoke, token review, MFA review, phishing watch). The advice is not acted on. Nothing is written to a tenant. JSON and NDJSON events use the `butcherbird.leak.v1` shape so a case tool can ingest them later.
+
+What has been reported is kept in the cache SQLite file as SHA-256 digests of the addresses, with no breach content. Exit code 1 means at least one new exposure. Schedule it with cron or a systemd timer. Read [docs/leak-monitoring.md](docs/leak-monitoring.md) for data handling, HIBP terms and the event shape.
+
 ## Tests
 
 Provider tests use recorded HTTP fixtures. They do not call the network.
@@ -160,6 +182,7 @@ A `v*` tag builds the CLI, Python wheels and a NuGet package for Linux x64, macO
 - [Architecture](docs/architecture.md)
 - [Add a provider](docs/adding-a-provider.md)
 - [Responsible use](docs/responsible-use.md)
+- [Leak monitoring](docs/leak-monitoring.md)
 
 ## License
 

@@ -5,6 +5,7 @@
 # MALWAREBAZAAR_AUTH_KEY, SAFEBROWSING_API_KEY
 # Mail: BUTCHERBIRD_SMTP_USERNAME, BUTCHERBIRD_SMTP_PASSWORD, BUTCHERBIRD_MAIL_TOKEN
 # OpenPhish, Spamhaus, RDAP and WHOIS do not take a key.
+# Leak monitor: HIBP_API_KEY (paid HIBP key).
 
 profile = "default"
 
@@ -103,3 +104,13 @@ dir = "butcherbird-evidence"
 
 # Drop a file of the same name here to replace one built-in template.
 # templates_dir = "templates"
+
+# Leak monitor (`butcherbird leaks`). Domains must be verified on your HIBP
+# account. VIPs are email addresses. Keep the key in HIBP_API_KEY.
+# [profiles.default.leaks]
+# domains = ["example.com"]
+# vips = ["ceo@example.net"]
+
+[profiles.default.providers.hibp]
+api_key_env = "HIBP_API_KEY"
+rate_per_minute = 10

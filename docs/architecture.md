@@ -4,7 +4,7 @@ Butcherbird is a Rust workspace. The library owns every decision about indicator
 
 ```
 crates/core    butcherbird-core   parsing, providers, scoring, reporting, output
-crates/cli     butcherbird        `butcherbird check`, `butcherbird report`
+crates/cli     butcherbird        `butcherbird check`, `butcherbird report`, `butcherbird leaks`
 ```
 
 Planned, not in this tree yet:
@@ -67,3 +67,20 @@ A successful submit writes `report_dedupe` and `report_audit` in one transaction
 Abuse mail calls `plan` before the dedupe check, so a dry run and a duplicate both query RDAP. The rendered message is not handed to SMTP or to the HTTP mail API unless `--submit` is set. No abuse contact is a skipped row.
 
 `butcherbird report` also writes `evidence.md`, `evidence.csv` and `evidence.pdf` under `report.evidence.dir` (default `butcherbird-evidence`). The pack lists ReportCyber, Scamwatch, IC3, Report Fraud (the service that replaced Action Fraud) and the Google Safe Browsing phishing form. Those destinations have no submit call in this tool. `--submit` does not send the pack. Set `report.evidence.enabled = false` to skip it. A Handlebars file of the same name in `report.templates_dir` replaces `abuse-email.hbs` or `evidence.md.hbs`. Use triple braces for values that must not be escaped.
+
+## Leak monitor
+
+`butcherbird leaks` lives in `crates/core/src/leaks`. It is not a `Provider`: `check` never calls it, and its results do not vote in `score::combine`.
+
+1. The watch list is `leaks.domains` and `leaks.vips`, plus `--domain` and `--vip`. Values go through `parse_ioc`. A VIP must be an email address.
+2. `GET /latestbreach` (no key). For each watch entry, if `leak_watch` already holds that breach name, the entry is `unchanged` and not searched. `--force` and `--all` search anyway.
+3. Domains use `GET /breacheddomain/{domain}`. VIPs use `GET /breachedaccount/{email}?truncateResponse=false`. Both send `hibp-api-key`. 404 is an empty result. 401 or 403 on a domain says the domain must be verified.
+4. An exposure is one address and one breach name. `leak_seen` decides whether it is new. Breach metadata comes from the account response or `GET /breach/{name}` (no key).
+5. Recommended actions come from the data classes. Events use `butcherbird.leak.v1`.
+6. The output is written. Then, unless `--dry-run`, new `leak_seen` rows and `leak_watch` markers are written in one transaction.
+
+| Id | Tier | Auth | Watches | Default rate |
+| --- | --- | --- | --- | --- |
+| `hibp` | paid | `HIBP_API_KEY` | domain (verified), email | 10/min |
+
+See [leak monitoring](leak-monitoring.md).

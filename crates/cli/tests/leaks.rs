@@ -127,10 +127,14 @@ async fn first_run_notifies_then_rerun_is_quiet() {
     assert!(md.contains("| alex@example.com | Quokka |"), "{md}");
     assert!(md.contains("**password_reset**"), "{md}");
 
-    let state = std::fs::read(dir.path().join("state/cache.sqlite")).unwrap();
-    let state = String::from_utf8_lossy(&state);
-    assert!(!state.contains("alex@example.com"));
-    assert!(!state.contains("vip@example.net"));
+    // Main file plus any WAL or shared-memory file.
+    for entry in std::fs::read_dir(dir.path().join("state")).unwrap() {
+        let bytes = std::fs::read(entry.unwrap().path()).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!text.contains("alex@example.com"));
+        assert!(!text.contains("vip@example.net"));
+        assert!(!text.contains("Passwords"));
+    }
 }
 
 #[tokio::test]

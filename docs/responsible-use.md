@@ -30,6 +30,16 @@ ReportCyber, Scamwatch, IC3, Report Fraud (the service that replaced Action Frau
 
 The audit log stores the payload and the response, with API keys and mail tokens masked. Category `15` (Hacking) is the AbuseIPDB default. Change `report.abuseipdb.categories` when that category is wrong.
 
+## Leak monitoring
+
+`butcherbird leaks` sends each watched domain and VIP address to Have I Been Pwned with your `HIBP_API_KEY`. HIBP sees what you search. Search only domains you have verified and control, and addresses you are responsible for. Watching a person's address is monitoring that person. Tell them, or have a policy that covers it.
+
+The key is a paid HIBP key. Keep it in `HIBP_API_KEY`, not in a committed file and not on the command line. It is sent only on domain and account searches, and it is masked in logs and errors.
+
+The output lists real addresses next to breach names. Treat it as incident data. HIBP data is CC BY 4.0. Keep the attribution line when you pass it on. Do not use it to harm the people in a breach.
+
+The reset advice is generic. Butcherbird does not reset passwords, revoke sessions or change anything in a tenant, and it does not contact the people affected, HIBP, or law enforcement. Do that yourself, through your normal process. The state file stores SHA-256 digests of addresses, which can be reversed by guessing. Protect it like the output. Details are in [leak monitoring](leak-monitoring.md).
+
 ## Fixtures
 
-Tests and examples use documentation addresses (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, `2001:db8::/32`) and the `.example` name. Do not replace those with live targets in the test suite.
+Tests and examples use documentation addresses (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`, `2001:db8::/32`), the `.example` name, and `example.com` or `example.net` mailboxes. Leak fixtures use made-up breach names and hold no breach content. Do not replace those with live targets in the test suite.
