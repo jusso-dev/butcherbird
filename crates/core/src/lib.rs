@@ -10,13 +10,14 @@ mod cache;
 pub mod config;
 pub mod enrich;
 pub mod ioc;
+pub mod leaks;
 pub mod output;
 pub mod provider;
 pub mod report;
 pub mod score;
 pub mod secret;
 
-pub use config::Config;
+pub use config::{Config, LeakSettings};
 pub use enrich::{exit_code, Engine, IocReport};
 pub use ioc::{extract_iocs, load_iocs, parse_ioc, InputFormat, Ioc, IocType};
 pub use output::{render, OutputFormat};

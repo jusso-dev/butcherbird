@@ -81,6 +81,11 @@ const BUILTINS: &[Builtin] = &[
         id: "whois",
         env: None,
     },
+    // Leak monitor source. Not used by `check`.
+    Builtin {
+        id: "hibp",
+        env: Some("HIBP_API_KEY"),
+    },
 ];
 
 /// Resolved runtime config for one profile.
@@ -96,7 +101,59 @@ pub struct Config {
     pub cache: CacheSettings,
     /// Abuse-report defaults. `yes` only skips the submit prompt.
     pub report: ReportSettings,
+    /// Watch list for `butcherbird leaks`.
+    pub leaks: LeakSettings,
     providers: BTreeMap<String, ProviderSettings>,
+}
+
+/// Watch list for the leak monitor. Values are normalised and validated.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LeakSettings {
+    /// Domains verified on the HIBP account, lower case.
+    pub domains: Vec<String>,
+    /// Named email addresses to check one by one, lower case.
+    pub vips: Vec<String>,
+}
+
+impl LeakSettings {
+    /// Add one domain. Rejects values that are not a DNS name.
+    pub fn add_domain(&mut self, raw: &str) -> Result<(), Error> {
+        let value = match crate::ioc::parse_ioc(raw) {
+            Some(ioc) if ioc.kind == crate::ioc::IocType::Domain => ioc.value,
+            _ => {
+                return Err(Error::Config(format!(
+                    "leaks domain `{}` is not a domain name",
+                    raw.trim()
+                )))
+            }
+        };
+        if !self.domains.contains(&value) {
+            self.domains.push(value);
+        }
+        Ok(())
+    }
+
+    /// Add one VIP. HIBP account search takes email addresses only.
+    pub fn add_vip(&mut self, raw: &str) -> Result<(), Error> {
+        let value = match crate::ioc::parse_ioc(raw) {
+            Some(ioc) if ioc.kind == crate::ioc::IocType::Email => ioc.value,
+            _ => {
+                return Err(Error::Config(format!(
+                    "leaks vip `{}` is not an email address. HIBP account search takes email addresses only",
+                    raw.trim()
+                )))
+            }
+        };
+        if !self.vips.contains(&value) {
+            self.vips.push(value);
+        }
+        Ok(())
+    }
+
+    /// True when there is nothing to check.
+    pub fn is_empty(&self) -> bool {
+        self.domains.is_empty() && self.vips.is_empty()
+    }
 }
 
 /// Where successful lookups are stored.
@@ -225,6 +282,7 @@ impl Config {
             timeout: Duration::from_secs(timeout_secs),
             cache: resolve_cache(profile_file.cache.as_ref()),
             report: resolve_report(profile_file.report.as_ref(), env)?,
+            leaks: resolve_leaks(profile_file.leaks.as_ref())?,
             providers,
         })
     }
@@ -247,6 +305,7 @@ impl fmt::Debug for Config {
             .field("cache_path", &self.cache.path)
             .field("cache_ttl", &self.cache.ttl)
             .field("report", &self.report)
+            .field("leaks", &self.leaks)
             .field("providers", &self.providers)
             .finish()
     }
@@ -293,6 +352,20 @@ fn resolve_provider(
         base_url: raw.base_url,
         rate_per_minute: raw.rate_per_minute,
     })
+}
+
+fn resolve_leaks(raw: Option<&LeaksFile>) -> Result<LeakSettings, Error> {
+    let mut out = LeakSettings::default();
+    let Some(raw) = raw else {
+        return Ok(out);
+    };
+    for domain in &raw.domains {
+        out.add_domain(domain)?;
+    }
+    for vip in &raw.vips {
+        out.add_vip(vip)?;
+    }
+    Ok(out)
 }
 
 fn resolve_report(
@@ -613,7 +686,18 @@ struct ProfileFile {
     #[serde(default)]
     report: Option<ReportFile>,
     #[serde(default)]
+    leaks: Option<LeaksFile>,
+    #[serde(default)]
     providers: BTreeMap<String, ProviderFile>,
+}
+
+#[derive(Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct LeaksFile {
+    #[serde(default)]
+    domains: Vec<String>,
+    #[serde(default)]
+    vips: Vec<String>,
 }
 
 #[derive(Clone, Deserialize, Default)]
@@ -901,5 +985,72 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("both"), "{err}");
+    }
+
+    #[test]
+    fn leak_watch_list_and_hibp_key() {
+        let mut env = HashMap::new();
+        env.insert("HIBP_API_KEY".to_string(), "bb-test-secret-key".to_string());
+        let cfg = Config::from_toml_with_env(
+            r#"
+            [profiles.default.leaks]
+            domains = ["Example.COM", "example.com", "corp[.]example"]
+            vips = [" CEO@Example.com "]
+
+            [profiles.default.providers.hibp]
+            api_key = "file-secret-should-lose"
+            "#,
+            None,
+            &env,
+        )
+        .unwrap();
+        assert_eq!(cfg.leaks.domains, ["example.com", "corp.example"]);
+        assert_eq!(cfg.leaks.vips, ["ceo@example.com"]);
+        assert_eq!(
+            cfg.provider("hibp")
+                .api_key
+                .as_ref()
+                .unwrap()
+                .as_header_value(),
+            "bb-test-secret-key"
+        );
+        let rendered = format!("{cfg:?}");
+        assert!(!rendered.contains("secret-key"), "{rendered}");
+        assert!(!rendered.contains("should-lose"), "{rendered}");
+
+        let empty = Config::from_toml_with_env("", None, &HashMap::new()).unwrap();
+        assert!(empty.leaks.is_empty());
+        assert!(empty.provider("hibp").api_key.is_none());
+        assert_eq!(
+            empty.provider("hibp").api_key_env.as_deref(),
+            Some("HIBP_API_KEY")
+        );
+    }
+
+    #[test]
+    fn leak_watch_list_rejects_bad_values() {
+        let err = Config::from_toml_with_env(
+            "[profiles.default.leaks]\nvips = [\"jdoe\"]\n",
+            None,
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("email addresses only"), "{err}");
+
+        let err = Config::from_toml_with_env(
+            "[profiles.default.leaks]\ndomains = [\"192.0.2.1\"]\n",
+            None,
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("not a domain"), "{err}");
+
+        let err = Config::from_toml_with_env(
+            "[profiles.default.leaks]\nemails = [\"a@example.com\"]\n",
+            None,
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("emails"), "{err}");
     }
 }
