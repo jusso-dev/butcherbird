@@ -142,7 +142,7 @@ impl LeakMonitor {
     /// [`Self::commit`] is called.
     pub async fn run(&self, watch: &LeakSettings, opts: LeakOptions) -> Result<LeakReport, Error> {
         let source = HIBP_META.id;
-        let now = chrono::Utc::now().timestamp();
+        let now = jiff::Timestamp::now().as_second();
         let mut warnings = Vec::new();
         // One cheap, keyless call. The marker is the newest breach's name and
         // modified time, so data added to an existing breach also changes it.

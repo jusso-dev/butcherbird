@@ -22,7 +22,7 @@ Or run from a checkout:
 cargo run -p butcherbird -- check examples/iocs.txt
 ```
 
-Rust 1.85 or newer.
+Rust 1.89 or newer.
 
 ## Quick start
 

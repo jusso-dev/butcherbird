@@ -130,15 +130,21 @@ impl LeakEvent {
     }
 }
 
+/// RFC 3339 UTC to the second, for example `2026-11-18T11:06:40Z`.
 pub(crate) fn rfc3339(secs: i64) -> String {
-    chrono::DateTime::from_timestamp(secs, 0)
-        .unwrap_or_default()
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    let ts = jiff::Timestamp::from_second(secs).unwrap_or(jiff::Timestamp::UNIX_EPOCH);
+    format!("{ts:.0}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rfc3339_is_whole_seconds_utc() {
+        assert_eq!(rfc3339(1_795_000_000), "2026-11-18T11:06:40Z");
+        assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
+    }
 
     #[test]
     fn event_fields_match_the_documented_shape() {

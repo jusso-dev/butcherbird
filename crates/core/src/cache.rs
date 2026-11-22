@@ -126,7 +126,7 @@ fn stale(stored_at: i64, ttl: Duration) -> bool {
 }
 
 fn now_secs() -> i64 {
-    chrono::Utc::now().timestamp()
+    jiff::Timestamp::now().as_second()
 }
 
 fn parse_verdict(value: &str) -> Option<Verdict> {

@@ -10,7 +10,7 @@ python -m venv .venv
 .venv/bin/maturin develop -m bindings/python/pyproject.toml
 ```
 
-Rust 1.85 or newer, and Python 3.9 or newer.
+Rust 1.89 or newer, and Python 3.9 or newer.
 
 ## Quick start
 

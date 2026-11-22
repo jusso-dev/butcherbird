@@ -91,7 +91,7 @@ impl AuditLog {
                 (reported_at, destination, ioc_type, ioc_value, status, payload, response)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
-                chrono::Utc::now().timestamp(),
+                jiff::Timestamp::now().as_second(),
                 row.destination,
                 row.ioc_type.as_str(),
                 row.ioc_value,

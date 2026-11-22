@@ -205,7 +205,8 @@ fn escape_cell(text: &str) -> String {
 }
 
 fn render_stix(reports: &[IocReport]) -> String {
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    // STIX wants RFC 3339 UTC with millisecond precision.
+    let now = format!("{:.3}", jiff::Timestamp::now());
     let objects: Vec<Value> = reports
         .iter()
         .map(|report| stix_indicator(report, &now))
@@ -298,5 +299,18 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("192.0.2.1"));
+        // RFC 3339 UTC with exactly three fractional digits, as before.
+        let created = stix["objects"][0]["created"].as_str().unwrap();
+        assert_eq!(created.len(), "2026-11-18T11:06:40.123Z".len(), "{created}");
+        assert!(
+            created.ends_with('Z') && created.as_bytes()[19] == b'.',
+            "{created}"
+        );
+    }
+
+    #[test]
+    fn millisecond_format_keeps_zero_digits() {
+        let ts = jiff::Timestamp::from_second(1_795_000_000).unwrap();
+        assert_eq!(format!("{ts:.3}"), "2026-11-18T11:06:40.000Z");
     }
 }
