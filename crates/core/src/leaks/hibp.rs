@@ -68,6 +68,25 @@ pub struct Breach {
     pub is_stealer_log: bool,
 }
 
+impl Breach {
+    /// A breach known only by name, when the metadata lookup fails.
+    pub fn named(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            title: None,
+            domain: None,
+            breach_date: None,
+            added_date: None,
+            data_classes: Vec::new(),
+            is_verified: false,
+            is_sensitive: false,
+            is_spam_list: false,
+            is_fabricated: false,
+            is_stealer_log: false,
+        }
+    }
+}
+
 /// HIBP v3 client.
 pub struct Hibp {
     client: reqwest::Client,

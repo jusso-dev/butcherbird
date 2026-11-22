@@ -206,6 +206,7 @@ dependencies = [
  "lettre",
  "regex",
  "reqwest",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",
