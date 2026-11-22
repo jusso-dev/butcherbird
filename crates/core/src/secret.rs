@@ -54,12 +54,14 @@ fn mask(secret: &str) -> String {
 }
 
 /// Truncate then redact, for HTTP error bodies.
+/// Redact first, so a key that crosses the cut is still masked.
 pub(crate) fn redact_truncate(text: &str, secret: &Secret, max_chars: usize) -> String {
-    let mut clipped: String = text.chars().take(max_chars).collect();
-    if text.chars().count() > max_chars {
+    let redacted = redact(text, secret);
+    let mut clipped: String = redacted.chars().take(max_chars).collect();
+    if redacted.chars().count() > max_chars {
         clipped.push('…');
     }
-    redact(&clipped, secret)
+    clipped
 }
 
 #[cfg(test)]
@@ -72,6 +74,15 @@ mod tests {
         let rendered = format!("{secret:?} {secret}");
         assert!(!rendered.contains("secret-key"));
         assert!(rendered.contains("bb-t****"));
+    }
+
+    #[test]
+    fn key_across_the_cut_is_still_masked() {
+        let secret = Secret::new("bb-test-secret-key");
+        let body = format!("{}bb-test-secret-key", "x".repeat(170));
+        let out = redact_truncate(&body, &secret, 180);
+        assert!(!out.contains("bb-test-se"), "{out}");
+        assert!(out.contains("bb-t****"), "{out}");
     }
 
     #[test]

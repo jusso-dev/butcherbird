@@ -8,15 +8,15 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["Justin Middler <justin@yumait.com.au>"]
 repository = "https://github.com/jusso-dev/butcherbird"
-rust-version = "1.85"
+rust-version = "1.89"
 
 [workspace.dependencies]
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.22"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
 clap = { version = "4", features = ["derive"] }
 csv = "1"
+jiff = { version = "1", default-features = false, features = ["std"] }
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
 serde = { version = "1", features = ["derive"] }
@@ -26,7 +26,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-url = "2"
+url = "2.5.9"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 butcherbird-core = { version = "0.1.0", path = "crates/core" }

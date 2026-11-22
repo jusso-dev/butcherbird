@@ -4,6 +4,9 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use butcherbird_core::leaks::{
+    hibp_from_config, render_leaks, LeakMonitor, LeakOptions, LeakOutput,
+};
 use butcherbird_core::{
     exit_code, load_iocs, render, render_reports, report_exit_code, write_evidence_pack, Config,
     Engine, Error, InputFormat, OutputFormat, ReportEngine,
@@ -27,6 +30,61 @@ enum Command {
     Check(CheckArgs),
     /// Plan or submit abuse reports. Dry run unless `--submit`.
     Report(ReportArgs),
+    /// Check watched domains and VIP addresses for new breaches (HIBP).
+    Leaks(LeaksArgs),
+}
+
+#[derive(Args)]
+struct LeaksArgs {
+    /// Domain to watch, added to `leaks.domains`. Must be verified on the HIBP account.
+    #[arg(long = "domain", value_name = "DOMAIN")]
+    domains: Vec<String>,
+    /// Email address to watch, added to `leaks.vips`.
+    #[arg(long = "vip", value_name = "EMAIL")]
+    vips: Vec<String>,
+    /// Show exposures already reported on an earlier run, as well as new ones.
+    #[arg(long)]
+    all: bool,
+    /// Search every entry even when HIBP has added no breach since the last run.
+    #[arg(long)]
+    force: bool,
+    /// Do not record what was shown. The next run reports the same exposures.
+    #[arg(long)]
+    dry_run: bool,
+    /// Output format written to stdout or `--out-file`.
+    #[arg(long, value_enum, default_value = "table")]
+    output: LeakOutputArg,
+    /// Write the output to this file instead of stdout.
+    #[arg(long)]
+    out_file: Option<PathBuf>,
+    /// Config file. Default: ./butcherbird.toml, then the user config dir.
+    #[arg(long)]
+    config: Option<PathBuf>,
+    /// Profile inside the config file.
+    #[arg(long)]
+    profile: Option<String>,
+    /// Log HIBP calls on stderr. Watched values are included. Keys are not.
+    #[arg(long)]
+    verbose: bool,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum LeakOutputArg {
+    Table,
+    Json,
+    Ndjson,
+    Markdown,
+}
+
+impl LeakOutputArg {
+    fn into_format(self) -> LeakOutput {
+        match self {
+            Self::Table => LeakOutput::Table,
+            Self::Json => LeakOutput::Json,
+            Self::Ndjson => LeakOutput::Ndjson,
+            Self::Markdown => LeakOutput::Markdown,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -130,6 +188,7 @@ fn main() -> ExitCode {
     match cli.command {
         Command::Check(args) => finish(run_check(args)),
         Command::Report(args) => finish(run_report(args)),
+        Command::Leaks(args) => finish(run_leaks(args)),
     }
 }
 
@@ -218,6 +277,70 @@ async fn run_report(args: ReportArgs) -> Result<i32, Error> {
     let rendered = render_reports(&rows, args.output.into_format())?;
     write_report(&rendered, args.out_file.as_deref())?;
     Ok(report_exit_code(&rows))
+}
+
+#[tokio::main]
+async fn run_leaks(args: LeaksArgs) -> Result<i32, Error> {
+    init_tracing(args.verbose);
+    let config = Config::load(args.config.as_deref(), args.profile.as_deref())?;
+    let mut watch = config.leaks.clone();
+    for domain in &args.domains {
+        watch.add_domain(domain)?;
+    }
+    for vip in &args.vips {
+        watch.add_vip(vip)?;
+    }
+    if watch.is_empty() {
+        eprintln!("butcherbird: nothing to watch. Set leaks.domains or leaks.vips, or pass --domain or --vip.");
+        return Ok(3);
+    }
+    let hibp = match hibp_from_config(&config)? {
+        Ok(hibp) => hibp,
+        Err(skipped) => {
+            eprintln!(
+                "butcherbird: hibp skipped: {}",
+                skipped.skip_reason().unwrap_or("disabled")
+            );
+            return Ok(3);
+        }
+    };
+    // A dry run never creates or writes the cache file.
+    let monitor = if args.dry_run {
+        LeakMonitor::read_only(hibp, &config.cache.path)?
+    } else {
+        LeakMonitor::new(hibp, &config.cache.path)?
+    };
+    let opts = LeakOptions {
+        all: args.all,
+        force: args.force,
+    };
+    let report = monitor.run(&watch, opts).await?;
+    let rendered = render_leaks(&report, args.output.into_format());
+    write_report(&rendered, args.out_file.as_deref())?;
+    // NDJSON carries events only, so problems always go to stderr too.
+    for row in report.failed_checks() {
+        eprintln!(
+            "butcherbird: {} {} search failed: {}",
+            row.watch.kind.as_str(),
+            row.watch.value,
+            row.detail
+        );
+    }
+    for warning in &report.warnings {
+        eprintln!("butcherbird: warning: {warning}");
+    }
+    if args.dry_run {
+        eprintln!("butcherbird: dry run, notified state not updated");
+    } else {
+        monitor.commit(&report)?;
+    }
+    eprintln!(
+        "butcherbird: {} new exposures, {} shown, {} searches failed",
+        report.new_count(),
+        report.events.len(),
+        report.failed_checks().count()
+    );
+    Ok(report.exit_code())
 }
 
 fn confirm_submit(skip_prompt: bool) -> Result<(), Error> {

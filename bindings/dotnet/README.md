@@ -4,7 +4,7 @@ The package calls the Rust core through the C ABI in `crates/ffi`. Parsing, scor
 
 ## Install from a checkout
 
-.NET 8 SDK, and Rust 1.85 or newer.
+.NET 8 SDK, and Rust 1.89 or newer.
 
 ```sh
 cargo build -p butcherbird-ffi

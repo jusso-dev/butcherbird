@@ -81,6 +81,11 @@ const BUILTINS: &[Builtin] = &[
         id: "whois",
         env: None,
     },
+    // Leak monitor source. Not used by `check`.
+    Builtin {
+        id: "hibp",
+        env: Some("HIBP_API_KEY"),
+    },
 ];
 
 /// Resolved runtime config for one profile.
@@ -96,7 +101,115 @@ pub struct Config {
     pub cache: CacheSettings,
     /// Abuse-report defaults. `yes` only skips the submit prompt.
     pub report: ReportSettings,
+    /// Watch list for `butcherbird leaks`.
+    pub leaks: LeakSettings,
     providers: BTreeMap<String, ProviderSettings>,
+}
+
+/// Watch list for the leak monitor. Values are normalised and validated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeakSettings {
+    /// Domains verified on the HIBP account, lower case.
+    pub domains: Vec<String>,
+    /// Named email addresses to check one by one, lower case.
+    pub vips: Vec<String>,
+    /// Search an entry at least this often, even when HIBP's latest breach
+    /// has not changed. `0` searches every run. Default 7.
+    pub recheck_days: u32,
+}
+
+impl Default for LeakSettings {
+    fn default() -> Self {
+        Self {
+            domains: Vec::new(),
+            vips: Vec::new(),
+            recheck_days: 7,
+        }
+    }
+}
+
+/// Lower-case DNS name, or `None`. Any TLD is accepted, including
+/// punycode, because these are names the operator owns. Defanged input
+/// (`example[.]com`) is accepted, as it is everywhere else in Butcherbird.
+fn watch_domain(raw: &str) -> Option<String> {
+    let name = crate::ioc::defang(raw.trim());
+    let name = name.trim().trim_end_matches('.').to_ascii_lowercase();
+    if name.is_empty() || name.len() > 253 || !name.is_ascii() {
+        return None;
+    }
+    if name.parse::<std::net::Ipv4Addr>().is_ok() {
+        return None;
+    }
+    let labels: Vec<&str> = name.split('.').collect();
+    let label_ok = |label: &&str| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    };
+    let tld = labels.last()?;
+    if labels.len() < 2 || !labels.iter().all(label_ok) || tld.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(name)
+}
+
+/// Lower-case mailbox, or `None`. The local part allows the printable
+/// characters a real mailbox can use, such as `+` and `'`.
+fn watch_email(raw: &str) -> Option<String> {
+    let value = crate::ioc::defang(raw.trim()).trim().to_ascii_lowercase();
+    let (local, domain) = value.rsplit_once('@')?;
+    let local_ok = !local.is_empty()
+        && local.len() <= 64
+        && local
+            .chars()
+            .all(|c| c.is_ascii_graphic() && !"\"(),:;<>@[\\]".contains(c));
+    if !local_ok {
+        return None;
+    }
+    Some(format!("{local}@{}", watch_domain(domain)?))
+}
+
+impl LeakSettings {
+    /// Add one domain. Rejects values that are not a DNS name.
+    pub fn add_domain(&mut self, raw: &str) -> Result<(), Error> {
+        let value = match watch_domain(raw) {
+            Some(value) => value,
+            None => {
+                return Err(Error::Config(format!(
+                    "leaks domain `{}` is not a domain name",
+                    raw.trim()
+                )))
+            }
+        };
+        if !self.domains.contains(&value) {
+            self.domains.push(value);
+        }
+        Ok(())
+    }
+
+    /// Add one VIP. HIBP account search takes email addresses only.
+    pub fn add_vip(&mut self, raw: &str) -> Result<(), Error> {
+        let value = match watch_email(raw) {
+            Some(value) => value,
+            None => {
+                return Err(Error::Config(format!(
+                    "leaks vip `{}` is not an email address. HIBP account search takes email addresses only",
+                    raw.trim()
+                )))
+            }
+        };
+        if !self.vips.contains(&value) {
+            self.vips.push(value);
+        }
+        Ok(())
+    }
+
+    /// True when there is nothing to check.
+    pub fn is_empty(&self) -> bool {
+        self.domains.is_empty() && self.vips.is_empty()
+    }
 }
 
 /// Where successful lookups are stored.
@@ -225,6 +338,7 @@ impl Config {
             timeout: Duration::from_secs(timeout_secs),
             cache: resolve_cache(profile_file.cache.as_ref()),
             report: resolve_report(profile_file.report.as_ref(), env)?,
+            leaks: resolve_leaks(profile_file.leaks.as_ref())?,
             providers,
         })
     }
@@ -247,6 +361,7 @@ impl fmt::Debug for Config {
             .field("cache_path", &self.cache.path)
             .field("cache_ttl", &self.cache.ttl)
             .field("report", &self.report)
+            .field("leaks", &self.leaks)
             .field("providers", &self.providers)
             .finish()
     }
@@ -293,6 +408,23 @@ fn resolve_provider(
         base_url: raw.base_url,
         rate_per_minute: raw.rate_per_minute,
     })
+}
+
+fn resolve_leaks(raw: Option<&LeaksFile>) -> Result<LeakSettings, Error> {
+    let mut out = LeakSettings::default();
+    let Some(raw) = raw else {
+        return Ok(out);
+    };
+    for domain in &raw.domains {
+        out.add_domain(domain)?;
+    }
+    for vip in &raw.vips {
+        out.add_vip(vip)?;
+    }
+    if let Some(days) = raw.recheck_days {
+        out.recheck_days = days;
+    }
+    Ok(out)
 }
 
 fn resolve_report(
@@ -613,7 +745,19 @@ struct ProfileFile {
     #[serde(default)]
     report: Option<ReportFile>,
     #[serde(default)]
+    leaks: Option<LeaksFile>,
+    #[serde(default)]
     providers: BTreeMap<String, ProviderFile>,
+}
+
+#[derive(Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct LeaksFile {
+    #[serde(default)]
+    domains: Vec<String>,
+    #[serde(default)]
+    vips: Vec<String>,
+    recheck_days: Option<u32>,
 }
 
 #[derive(Clone, Deserialize, Default)]
@@ -901,5 +1045,116 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("both"), "{err}");
+    }
+
+    #[test]
+    fn leak_watch_list_and_hibp_key() {
+        let mut env = HashMap::new();
+        env.insert("HIBP_API_KEY".to_string(), "bb-test-secret-key".to_string());
+        let cfg = Config::from_toml_with_env(
+            r#"
+            [profiles.default.leaks]
+            domains = ["Example.COM", "example.com", "corp.example.", "acme.md", "xn--80ak6aa92e.com"]
+            vips = [" CEO@Example.com ", "o'connor+it@example.net"]
+            recheck_days = 1
+
+            [profiles.default.providers.hibp]
+            api_key = "file-secret-should-lose"
+            "#,
+            None,
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.leaks.domains,
+            [
+                "example.com",
+                "corp.example",
+                "acme.md",
+                "xn--80ak6aa92e.com"
+            ]
+        );
+        assert_eq!(
+            cfg.leaks.vips,
+            ["ceo@example.com", "o'connor+it@example.net"]
+        );
+        assert_eq!(cfg.leaks.recheck_days, 1);
+        assert_eq!(
+            cfg.provider("hibp")
+                .api_key
+                .as_ref()
+                .unwrap()
+                .as_header_value(),
+            "bb-test-secret-key"
+        );
+        let rendered = format!("{cfg:?}");
+        assert!(!rendered.contains("secret-key"), "{rendered}");
+        assert!(!rendered.contains("should-lose"), "{rendered}");
+
+        let empty = Config::from_toml_with_env("", None, &HashMap::new()).unwrap();
+        assert!(empty.leaks.is_empty());
+        assert_eq!(empty.leaks.recheck_days, 7);
+        assert!(empty.provider("hibp").api_key.is_none());
+        assert_eq!(
+            empty.provider("hibp").api_key_env.as_deref(),
+            Some("HIBP_API_KEY")
+        );
+    }
+
+    #[test]
+    fn leak_watch_list_rejects_bad_values() {
+        let err = Config::from_toml_with_env(
+            "[profiles.default.leaks]\nvips = [\"jdoe\"]\n",
+            None,
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("email addresses only"), "{err}");
+
+        let err = Config::from_toml_with_env(
+            "[profiles.default.leaks]\ndomains = [\"192.0.2.1\"]\n",
+            None,
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("not a domain"), "{err}");
+
+        let mut defanged = LeakSettings::default();
+        defanged.add_domain("Example[.]COM").unwrap();
+        defanged.add_domain("corp(dot)example").unwrap();
+        defanged.add_vip("Jo(at)example[.]net").unwrap();
+        defanged.add_vip("o'brien[@]example.com").unwrap();
+        assert_eq!(defanged.domains, ["example.com", "corp.example"]);
+        assert_eq!(defanged.vips, ["jo@example.net", "o'brien@example.com"]);
+
+        for bad in [
+            "-bad.example",
+            "a..example",
+            "bad_label.example",
+            "localhost",
+            "192.0.2.1",
+            "198[.]51[.]100[.]7",
+            "2001:db8::1",
+        ] {
+            let mut watch = LeakSettings::default();
+            assert!(watch.add_domain(bad).is_err(), "{bad}");
+        }
+        for bad in [
+            "a b@example.com",
+            "@example.com",
+            "x@192.0.2.1",
+            "a<b@example.com",
+        ] {
+            let mut watch = LeakSettings::default();
+            assert!(watch.add_vip(bad).is_err(), "{bad}");
+        }
+
+        let err = Config::from_toml_with_env(
+            "[profiles.default.leaks]\nemails = [\"a@example.com\"]\n",
+            None,
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("emails"), "{err}");
     }
 }
