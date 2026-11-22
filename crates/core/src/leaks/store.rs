@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::Error;
 
@@ -52,39 +52,28 @@ pub(crate) struct WatchRow {
 }
 
 impl LeakStore {
-    /// Open for a dry run. Nothing is created or written: an existing file is
-    /// opened read-only, and a missing file or missing tables become an empty
-    /// in-memory store.
+    /// Open for a dry run. Nothing in the cache directory is created,
+    /// written or locked. SQLite can create or update `-shm` even on a
+    /// read-only open, so the file and its `-wal` are copied to a private
+    /// temporary directory, the leak tables are read from the copy into
+    /// memory, and the copy is deleted. A missing file, or a file without
+    /// the leak tables, is an empty store.
     pub(crate) fn open_read_only(path: &Path) -> Result<Self, Error> {
-        let existing = if path.is_file() {
-            Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .ok()
-                .filter(|conn| {
-                    let _ = conn.busy_timeout(Duration::from_millis(2_000));
-                    conn.query_row(
-                        "SELECT COUNT(*) FROM sqlite_master
-                         WHERE type = 'table' AND name IN ('leak_seen', 'leak_watch')",
-                        [],
-                        |row| row.get::<_, i64>(0),
-                    )
-                    .map(|count| count == 2)
-                    .unwrap_or(false)
-                })
-        } else {
-            None
-        };
-        let conn = match existing {
-            Some(conn) => conn,
-            None => {
-                let conn =
-                    Connection::open_in_memory().map_err(|err| Error::Cache(err.to_string()))?;
-                conn.execute_batch(SCHEMA)
-                    .map_err(|err| Error::Cache(err.to_string()))?;
-                conn
+        let mem = Connection::open_in_memory().map_err(|err| Error::Cache(err.to_string()))?;
+        mem.execute_batch(SCHEMA)
+            .map_err(|err| Error::Cache(err.to_string()))?;
+        if path.is_file() {
+            let scratch = Scratch::new()?;
+            let copy = scratch.path.join("state.sqlite");
+            copy_file(path, &copy)?;
+            let wal = sidecar(path, "-wal");
+            if wal.is_file() {
+                copy_file(&wal, &sidecar(&copy, "-wal"))?;
             }
-        };
+            load_leak_tables(&mem, &copy)?;
+        }
         Ok(Self {
-            conn: Mutex::new(conn),
+            conn: Mutex::new(mem),
         })
     }
 
@@ -208,6 +197,75 @@ impl LeakStore {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|err| err.into_inner())
+    }
+}
+
+/// Copy the leak tables from `copy` into `mem`. The copy is a private file,
+/// so SQLite may recover its WAL and write sidecars there.
+fn load_leak_tables(mem: &Connection, copy: &Path) -> Result<(), Error> {
+    let cache = |err: rusqlite::Error| Error::Cache(err.to_string());
+    let target = copy
+        .to_str()
+        .ok_or_else(|| Error::Cache("temporary path is not UTF-8".into()))?;
+    mem.execute("ATTACH DATABASE ?1 AS src", params![target])
+        .map_err(cache)?;
+    let tables: i64 = mem
+        .query_row(
+            "SELECT COUNT(*) FROM src.sqlite_master
+             WHERE type = 'table' AND name IN ('leak_seen', 'leak_watch')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(cache)?;
+    if tables == 2 {
+        mem.execute_batch(
+            "INSERT INTO main.leak_seen (source, identity_sha256, breach_sha256, first_seen)
+                 SELECT source, identity_sha256, breach_sha256, first_seen FROM src.leak_seen;
+             INSERT INTO main.leak_watch (source, watch_sha256, latest_breach, checked_at)
+                 SELECT source, watch_sha256, latest_breach, checked_at FROM src.leak_watch;",
+        )
+        .map_err(cache)?;
+    }
+    mem.execute_batch("DETACH DATABASE src").map_err(cache)
+}
+
+fn sidecar(path: &Path, suffix: &str) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    name.into()
+}
+
+fn copy_file(from: &Path, to: &Path) -> Result<(), Error> {
+    fs::copy(from, to)
+        .map(|_| ())
+        .map_err(|err| Error::Cache(format!("read {}: {err}", from.display())))
+}
+
+/// Private temporary directory, removed on drop.
+struct Scratch {
+    path: std::path::PathBuf,
+}
+
+impl Scratch {
+    fn new() -> Result<Self, Error> {
+        let path =
+            std::env::temp_dir().join(format!("butcherbird-dry-run-{}", uuid::Uuid::new_v4()));
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder
+            .create(&path)
+            .map_err(|err| Error::Cache(format!("create {}: {err}", path.display())))?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
     }
 }
 
@@ -351,6 +409,74 @@ mod tests {
             Some(7)
         );
         assert!(ro.commit(&[], &[]).is_ok());
+    }
+
+    fn listing(dir: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut out: Vec<(String, Vec<u8>)> = fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                (name, fs::read(&path).unwrap())
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn read_only_open_leaves_a_wal_without_shm_untouched() {
+        // A state file whose only copy of a row is in an uncheckpointed WAL.
+        let build = tempfile::tempdir().unwrap();
+        let src = build.path().join("cache.sqlite");
+        let writer = LeakStore::open(&src).unwrap();
+        writer
+            .lock()
+            .execute_batch("PRAGMA wal_autocheckpoint = 0;")
+            .unwrap();
+        writer
+            .commit(
+                &[SeenRow {
+                    source: "hibp".into(),
+                    identity: "a@example.com".into(),
+                    breach: "Quokka".into(),
+                    first_seen: 9,
+                }],
+                &[],
+            )
+            .unwrap();
+        // Copy the file and its WAL, not the shared-memory file, while the
+        // writer is still open. That is what an unclean exit leaves behind.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.sqlite");
+        fs::copy(&src, &path).unwrap();
+        fs::copy(sidecar(&src, "-wal"), sidecar(&path, "-wal")).unwrap();
+        drop(writer);
+
+        let before = listing(dir.path());
+        assert_eq!(
+            before
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["cache.sqlite", "cache.sqlite-wal"]
+        );
+        assert!(
+            fs::metadata(sidecar(&path, "-wal")).unwrap().len() > 0,
+            "fixture must hold the row in the WAL"
+        );
+        let ro = LeakStore::open_read_only(&path).unwrap();
+        assert_eq!(
+            ro.first_seen("hibp", "a@example.com", "Quokka").unwrap(),
+            Some(9),
+            "the WAL row must be read"
+        );
+        drop(ro);
+        assert_eq!(
+            listing(dir.path()),
+            before,
+            "dry run changed the cache directory"
+        );
     }
 
     #[test]

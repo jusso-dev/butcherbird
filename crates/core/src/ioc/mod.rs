@@ -6,6 +6,7 @@ mod parse;
 
 pub use extract::extract_iocs;
 pub use load::{load_iocs, InputFormat};
+pub(crate) use parse::defang;
 pub use parse::parse_ioc;
 
 use serde::{Deserialize, Serialize};

@@ -154,10 +154,21 @@ async fn dry_run_keeps_reporting_the_same_exposure() {
 
     // With existing state, a dry run reads it and still writes nothing.
     leaks(dir.path(), &[]).code(1);
-    let before = std::fs::read(dir.path().join("state/cache.sqlite")).unwrap();
+    let snapshot = || {
+        let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(dir.path().join("state"))
+            .unwrap()
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                (name, std::fs::read(&path).unwrap())
+            })
+            .collect();
+        files.sort();
+        files
+    };
+    let before = snapshot();
     leaks(dir.path(), &["--dry-run", "--force"]).code(0);
-    let after = std::fs::read(dir.path().join("state/cache.sqlite")).unwrap();
-    assert_eq!(before, after);
+    assert_eq!(snapshot(), before, "dry run changed the state directory");
 }
 
 #[tokio::test]

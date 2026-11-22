@@ -20,7 +20,7 @@ api_key_env = "HIBP_API_KEY"
 rate_per_minute = 10
 ```
 
-`--domain` and `--vip` add to the configured list for one run. A VIP must be an email address, because HIBP account search takes email addresses only. Usernames and phone numbers are rejected. Any TLD is accepted, including punycode (`xn--`) names.
+`--domain` and `--vip` add to the configured list for one run. A VIP must be an email address, because HIBP account search takes email addresses only. Usernames and phone numbers are rejected. Any TLD is accepted, including punycode (`xn--`) names. Defanged values such as `example[.]com` and `jo(at)example[.]com` are accepted. IP addresses are rejected.
 
 Set `rate_per_minute` to your plan's limit, or lower. The default is 10, the smallest paid plan. A 429 is retried with backoff.
 
@@ -67,7 +67,7 @@ Addresses, breach names and watch entries are stored as unsalted SHA-256 digests
 
 An exposure is remembered only when its breach metadata was read. If `GET /breach/{name}` fails, the exposure is shown with every reset step, a warning says why, and the next run shows it again.
 
-State is written after the output has been written. If the write fails, the next run reports the same exposures again. That is deliberate: a missed notice is worse than a repeated one. `--dry-run` writes nothing: it opens an existing state file read-only and does not create one. To start again, delete the rows:
+State is written after the output has been written. If the write fails, the next run reports the same exposures again. That is deliberate: a missed notice is worse than a repeated one. `--dry-run` writes nothing in the cache directory. It reads a private copy of the state file (and its `-wal`) from a temporary directory that is deleted afterwards, and it does not create the state file. To start again, delete the rows:
 
 ```sh
 sqlite3 ~/.cache/butcherbird/cache.sqlite 'DELETE FROM leak_seen; DELETE FROM leak_watch;'

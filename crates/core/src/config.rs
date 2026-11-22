@@ -129,9 +129,11 @@ impl Default for LeakSettings {
 }
 
 /// Lower-case DNS name, or `None`. Any TLD is accepted, including
-/// punycode, because these are names the operator owns.
+/// punycode, because these are names the operator owns. Defanged input
+/// (`example[.]com`) is accepted, as it is everywhere else in Butcherbird.
 fn watch_domain(raw: &str) -> Option<String> {
-    let name = raw.trim().trim_end_matches('.').to_ascii_lowercase();
+    let name = crate::ioc::defang(raw.trim());
+    let name = name.trim().trim_end_matches('.').to_ascii_lowercase();
     if name.is_empty() || name.len() > 253 || !name.is_ascii() {
         return None;
     }
@@ -156,7 +158,7 @@ fn watch_domain(raw: &str) -> Option<String> {
 /// Lower-case mailbox, or `None`. The local part allows the printable
 /// characters a real mailbox can use, such as `+` and `'`.
 fn watch_email(raw: &str) -> Option<String> {
-    let value = raw.trim().to_ascii_lowercase();
+    let value = crate::ioc::defang(raw.trim()).trim().to_ascii_lowercase();
     let (local, domain) = value.rsplit_once('@')?;
     let local_ok = !local.is_empty()
         && local.len() <= 64
@@ -1117,11 +1119,22 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("not a domain"), "{err}");
 
+        let mut defanged = LeakSettings::default();
+        defanged.add_domain("Example[.]COM").unwrap();
+        defanged.add_domain("corp(dot)example").unwrap();
+        defanged.add_vip("Jo(at)example[.]net").unwrap();
+        defanged.add_vip("o'brien[@]example.com").unwrap();
+        assert_eq!(defanged.domains, ["example.com", "corp.example"]);
+        assert_eq!(defanged.vips, ["jo@example.net", "o'brien@example.com"]);
+
         for bad in [
             "-bad.example",
             "a..example",
             "bad_label.example",
             "localhost",
+            "192.0.2.1",
+            "198[.]51[.]100[.]7",
+            "2001:db8::1",
         ] {
             let mut watch = LeakSettings::default();
             assert!(watch.add_domain(bad).is_err(), "{bad}");
