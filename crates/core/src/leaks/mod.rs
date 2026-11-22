@@ -138,6 +138,15 @@ impl LeakMonitor {
         })
     }
 
+    /// For a dry run. Reads existing state, if any, and never creates or
+    /// writes the cache file. [`Self::commit`] must not be called.
+    pub fn read_only(hibp: Hibp, cache_path: &Path) -> Result<Self, Error> {
+        Ok(Self {
+            hibp,
+            store: LeakStore::open_read_only(cache_path)?,
+        })
+    }
+
     /// Check every watch entry. Nothing is written to the state tables until
     /// [`Self::commit`] is called.
     pub async fn run(&self, watch: &LeakSettings, opts: LeakOptions) -> Result<LeakReport, Error> {

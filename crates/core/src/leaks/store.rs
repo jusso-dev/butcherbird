@@ -10,9 +10,24 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 
 use crate::Error;
+
+const SCHEMA: &str = "CREATE TABLE IF NOT EXISTS leak_seen (
+                source TEXT NOT NULL,
+                identity_sha256 TEXT NOT NULL,
+                breach_sha256 TEXT NOT NULL,
+                first_seen INTEGER NOT NULL,
+                PRIMARY KEY (source, identity_sha256, breach_sha256)
+            );
+            CREATE TABLE IF NOT EXISTS leak_watch (
+                source TEXT NOT NULL,
+                watch_sha256 TEXT NOT NULL,
+                latest_breach TEXT NOT NULL,
+                checked_at INTEGER NOT NULL,
+                PRIMARY KEY (source, watch_sha256)
+            );";
 
 pub(crate) struct LeakStore {
     conn: Mutex<Connection>,
@@ -37,6 +52,42 @@ pub(crate) struct WatchRow {
 }
 
 impl LeakStore {
+    /// Open for a dry run. Nothing is created or written: an existing file is
+    /// opened read-only, and a missing file or missing tables become an empty
+    /// in-memory store.
+    pub(crate) fn open_read_only(path: &Path) -> Result<Self, Error> {
+        let existing = if path.is_file() {
+            Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .ok()
+                .filter(|conn| {
+                    let _ = conn.busy_timeout(Duration::from_millis(2_000));
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM sqlite_master
+                         WHERE type = 'table' AND name IN ('leak_seen', 'leak_watch')",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .map(|count| count == 2)
+                    .unwrap_or(false)
+                })
+        } else {
+            None
+        };
+        let conn = match existing {
+            Some(conn) => conn,
+            None => {
+                let conn =
+                    Connection::open_in_memory().map_err(|err| Error::Cache(err.to_string()))?;
+                conn.execute_batch(SCHEMA)
+                    .map_err(|err| Error::Cache(err.to_string()))?;
+                conn
+            }
+        };
+        Ok(Self {
+            conn: Mutex::new(conn),
+        })
+    }
+
     pub(crate) fn open(path: &Path) -> Result<Self, Error> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -48,23 +99,8 @@ impl LeakStore {
             .map_err(|err| Error::Cache(format!("open {}: {err}", path.display())))?;
         let _ = conn.busy_timeout(Duration::from_millis(2_000));
         let _ = conn.pragma_update(None, "journal_mode", "WAL");
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS leak_seen (
-                source TEXT NOT NULL,
-                identity_sha256 TEXT NOT NULL,
-                breach_sha256 TEXT NOT NULL,
-                first_seen INTEGER NOT NULL,
-                PRIMARY KEY (source, identity_sha256, breach_sha256)
-            );
-            CREATE TABLE IF NOT EXISTS leak_watch (
-                source TEXT NOT NULL,
-                watch_sha256 TEXT NOT NULL,
-                latest_breach TEXT NOT NULL,
-                checked_at INTEGER NOT NULL,
-                PRIMARY KEY (source, watch_sha256)
-            );",
-        )
-        .map_err(|err| Error::Cache(err.to_string()))?;
+        conn.execute_batch(SCHEMA)
+            .map_err(|err| Error::Cache(err.to_string()))?;
         owner_only(path);
         Ok(Self {
             conn: Mutex::new(conn),
@@ -284,6 +320,37 @@ mod tests {
             let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         }
+    }
+
+    #[test]
+    fn read_only_open_creates_nothing_and_reads_existing_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state").join("cache.sqlite");
+        let empty = LeakStore::open_read_only(&path).unwrap();
+        assert!(empty
+            .first_seen("hibp", "a@example.com", "Quokka")
+            .unwrap()
+            .is_none());
+        assert!(!dir.path().join("state").exists());
+
+        let rw = LeakStore::open(&path).unwrap();
+        rw.commit(
+            &[SeenRow {
+                source: "hibp".into(),
+                identity: "a@example.com".into(),
+                breach: "Quokka".into(),
+                first_seen: 7,
+            }],
+            &[],
+        )
+        .unwrap();
+        drop(rw);
+        let ro = LeakStore::open_read_only(&path).unwrap();
+        assert_eq!(
+            ro.first_seen("hibp", "a@example.com", "Quokka").unwrap(),
+            Some(7)
+        );
+        assert!(ro.commit(&[], &[]).is_ok());
     }
 
     #[test]

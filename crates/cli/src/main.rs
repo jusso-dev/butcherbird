@@ -304,7 +304,12 @@ async fn run_leaks(args: LeaksArgs) -> Result<i32, Error> {
             return Ok(3);
         }
     };
-    let monitor = LeakMonitor::new(hibp, &config.cache.path)?;
+    // A dry run never creates or writes the cache file.
+    let monitor = if args.dry_run {
+        LeakMonitor::read_only(hibp, &config.cache.path)?
+    } else {
+        LeakMonitor::new(hibp, &config.cache.path)?
+    };
     let opts = LeakOptions {
         all: args.all,
         force: args.force,

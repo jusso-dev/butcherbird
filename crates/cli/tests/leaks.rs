@@ -147,6 +147,17 @@ async fn dry_run_keeps_reporting_the_same_exposure() {
         .stderr(predicates::str::contains("dry run"));
     let again = leaks(dir.path(), &["--dry-run", "--output", "ndjson"]).code(1);
     assert_eq!(stdout(&again).lines().count(), 1);
+    assert!(
+        !dir.path().join("state").exists(),
+        "dry run created the cache"
+    );
+
+    // With existing state, a dry run reads it and still writes nothing.
+    leaks(dir.path(), &[]).code(1);
+    let before = std::fs::read(dir.path().join("state/cache.sqlite")).unwrap();
+    leaks(dir.path(), &["--dry-run", "--force"]).code(0);
+    let after = std::fs::read(dir.path().join("state/cache.sqlite")).unwrap();
+    assert_eq!(before, after);
 }
 
 #[tokio::test]

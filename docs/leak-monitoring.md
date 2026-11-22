@@ -67,7 +67,7 @@ Addresses, breach names and watch entries are stored as unsalted SHA-256 digests
 
 An exposure is remembered only when its breach metadata was read. If `GET /breach/{name}` fails, the exposure is shown with every reset step, a warning says why, and the next run shows it again.
 
-State is written after the output has been written. If the write fails, the next run reports the same exposures again. That is deliberate: a missed notice is worse than a repeated one. `--dry-run` writes nothing. To start again, delete the rows:
+State is written after the output has been written. If the write fails, the next run reports the same exposures again. That is deliberate: a missed notice is worse than a repeated one. `--dry-run` writes nothing: it opens an existing state file read-only and does not create one. To start again, delete the rows:
 
 ```sh
 sqlite3 ~/.cache/butcherbird/cache.sqlite 'DELETE FROM leak_seen; DELETE FROM leak_watch;'
@@ -143,7 +143,7 @@ Butcherbird does not run any of these. There is no Microsoft Graph, Okta or Goog
 | Field | Meaning |
 | --- | --- |
 | `schema` | Always `butcherbird.leak.v1` |
-| `event_id` | First 32 hex characters of SHA-256 over source, identity and breach name. The same exposure has the same id on every run. Use it to dedupe |
+| `event_id` | First 32 lower-case hex characters of the SHA-256 of the UTF-8 bytes `source + "\n" + identity + "\n" + breach.name`, with no trailing newline. The same exposure has the same id on every run. Use it to dedupe |
 | `source` | Data source id. `hibp` in this version |
 | `watch.kind` | `domain` or `vip`. When an address matches both a VIP and a watched domain, it is reported once as `vip` |
 | `watch.value` | The watch entry that matched |
