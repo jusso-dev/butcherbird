@@ -159,7 +159,7 @@ butcherbird leaks --all --dry-run
 
 Output is a table, JSON, NDJSON or Markdown. Each exposure lists the address, the breach, when Butcherbird first reported it, and a generic reset path (password reset, session revoke, token review, MFA review, phishing watch). The advice is not acted on. Nothing is written to a tenant. JSON and NDJSON events use the `butcherbird.leak.v1` shape so a case tool can ingest them later.
 
-What has been reported is kept in the cache SQLite file as SHA-256 digests of the addresses, with no breach content. Exit code 1 means at least one new exposure. Schedule it with cron or a systemd timer. Read [docs/leak-monitoring.md](docs/leak-monitoring.md) for data handling, HIBP terms and the event shape.
+What has been reported is kept in the cache SQLite file as SHA-256 digests of the addresses and breach names, with no breach content. Exit code 1 means at least one new exposure. Exit code 4 means nothing new and at least one search failed. Failures always go to stderr. Schedule it with cron or a systemd timer. Read [docs/leak-monitoring.md](docs/leak-monitoring.md) for data handling, HIBP terms and the event shape.
 
 ## Tests
 

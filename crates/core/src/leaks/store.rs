@@ -1,9 +1,9 @@
 //! "Already notified" state for the leak monitor.
 //!
 //! Rows live in the cache SQLite file, next to the lookup cache and the
-//! report audit. Identities and watch entries are stored as SHA-256 digests,
-//! not plaintext. No breach content is stored: only the breach name and when
-//! this tool first showed it.
+//! report audit. Identities, breach names and watch entries are stored as
+//! SHA-256 digests, not plaintext. No breach content is stored: only digests
+//! and when this tool first showed the exposure.
 
 use std::fs;
 use std::path::Path;
@@ -46,15 +46,15 @@ impl LeakStore {
         }
         let conn = Connection::open(path)
             .map_err(|err| Error::Cache(format!("open {}: {err}", path.display())))?;
-        let _ = conn.pragma_update(None, "journal_mode", "WAL");
         let _ = conn.busy_timeout(Duration::from_millis(2_000));
+        let _ = conn.pragma_update(None, "journal_mode", "WAL");
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS leak_seen (
                 source TEXT NOT NULL,
                 identity_sha256 TEXT NOT NULL,
-                breach TEXT NOT NULL,
+                breach_sha256 TEXT NOT NULL,
                 first_seen INTEGER NOT NULL,
-                PRIMARY KEY (source, identity_sha256, breach)
+                PRIMARY KEY (source, identity_sha256, breach_sha256)
             );
             CREATE TABLE IF NOT EXISTS leak_watch (
                 source TEXT NOT NULL,
@@ -65,6 +65,7 @@ impl LeakStore {
             );",
         )
         .map_err(|err| Error::Cache(err.to_string()))?;
+        owner_only(path);
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -80,22 +81,26 @@ impl LeakStore {
         self.lock()
             .query_row(
                 "SELECT first_seen FROM leak_seen
-                 WHERE source = ?1 AND identity_sha256 = ?2 AND breach = ?3",
-                params![source, digest(identity), breach],
+                 WHERE source = ?1 AND identity_sha256 = ?2 AND breach_sha256 = ?3",
+                params![source, digest(identity), digest(breach)],
                 |row| row.get(0),
             )
             .optional()
             .map_err(|err| Error::Cache(err.to_string()))
     }
 
-    /// Latest breach name recorded the last time `watch` was searched.
-    pub(crate) fn latest_for(&self, source: &str, watch: &str) -> Result<Option<String>, Error> {
+    /// Latest-breach marker and search time from the last full search of `watch`.
+    pub(crate) fn latest_for(
+        &self,
+        source: &str,
+        watch: &str,
+    ) -> Result<Option<(String, i64)>, Error> {
         self.lock()
             .query_row(
-                "SELECT latest_breach FROM leak_watch
+                "SELECT latest_breach, checked_at FROM leak_watch
                  WHERE source = ?1 AND watch_sha256 = ?2",
                 params![source, digest(watch)],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
             .map_err(|err| Error::Cache(err.to_string()))
@@ -110,12 +115,12 @@ impl LeakStore {
             .map_err(|err| Error::Cache(err.to_string()))?;
         for row in seen {
             tx.execute(
-                "INSERT OR IGNORE INTO leak_seen (source, identity_sha256, breach, first_seen)
+                "INSERT OR IGNORE INTO leak_seen (source, identity_sha256, breach_sha256, first_seen)
                  VALUES (?1, ?2, ?3, ?4)",
                 params![
                     row.source,
                     digest(&row.identity),
-                    row.breach,
+                    digest(&row.breach),
                     row.first_seen
                 ],
             )
@@ -127,7 +132,8 @@ impl LeakStore {
                  VALUES (?1, ?2, ?3, ?4)
                  ON CONFLICT(source, watch_sha256) DO UPDATE SET
                     latest_breach = excluded.latest_breach,
-                    checked_at = excluded.checked_at",
+                    checked_at = excluded.checked_at
+                 WHERE excluded.checked_at >= leak_watch.checked_at",
                 params![
                     row.source,
                     digest(&row.watch),
@@ -168,6 +174,17 @@ impl LeakStore {
         self.conn.lock().unwrap_or_else(|err| err.into_inner())
     }
 }
+
+/// Keep the state file readable by its owner only. The WAL and shared
+/// memory files take their mode from the main file.
+#[cfg(unix)]
+fn owner_only(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn owner_only(_path: &Path) {}
 
 /// Lower-case hex SHA-256 of `value`.
 pub(crate) fn digest(value: &str) -> String {
@@ -213,12 +230,60 @@ mod tests {
         );
         assert_eq!(
             store.latest_for("hibp", "domain:example.com").unwrap(),
-            Some("Quokka".to_string())
+            Some(("Quokka".to_string(), 100))
+        );
+        // An older run finishing late does not move the marker back.
+        let stale = [WatchRow {
+            latest_breach: "Older".into(),
+            checked_at: 50,
+            ..watched[0].clone()
+        }];
+        store.commit(&[], &stale).unwrap();
+        assert_eq!(
+            store.latest_for("hibp", "domain:example.com").unwrap(),
+            Some(("Quokka".to_string(), 100))
         );
         let dump = store.dump().join("\n");
         assert!(!dump.contains("alex"), "{dump}");
         assert!(!dump.contains("example.com"), "{dump}");
+        let seen_rows: Vec<&str> = dump
+            .lines()
+            .filter(|line| line.starts_with("leak_seen:"))
+            .collect();
+        assert!(
+            seen_rows.iter().all(|row| !row.contains("Quokka")),
+            "{dump}"
+        );
         assert!(dump.contains(&digest("alex@example.com")), "{dump}");
+        assert!(dump.contains(&digest("Quokka")), "{dump}");
+    }
+
+    #[test]
+    fn opens_an_existing_cache_file_and_is_owner_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.sqlite");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE lookup_cache (provider TEXT);
+                 INSERT INTO lookup_cache VALUES ('abuseipdb');
+                 CREATE TABLE report_audit (id INTEGER);",
+            )
+            .unwrap();
+        }
+        let store = LeakStore::open(&path).unwrap();
+        assert!(store.dump().is_empty());
+        let kept: i64 = store
+            .lock()
+            .query_row("SELECT COUNT(*) FROM lookup_cache", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(kept, 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
     }
 
     #[test]

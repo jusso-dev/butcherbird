@@ -58,7 +58,14 @@ impl Action {
 }
 
 /// Recommended steps, in a fixed order. Never empty.
+///
+/// A breach with no data classes is one whose metadata could not be read.
+/// It gets every step, because the safe guess is that passwords and sessions
+/// were exposed.
 pub fn recommend(breach: &Breach) -> Vec<Action> {
+    if breach.data_classes.is_empty() {
+        return Action::ALL.to_vec();
+    }
     let mut out = Vec::new();
     let classes: Vec<String> = breach
         .data_classes
@@ -161,6 +168,11 @@ mod tests {
                 Action::PhishingWatch
             ]
         );
+    }
+
+    #[test]
+    fn unknown_data_classes_get_every_step() {
+        assert_eq!(recommend(&breach(&[])), Action::ALL);
     }
 
     #[test]

@@ -312,15 +312,28 @@ async fn run_leaks(args: LeaksArgs) -> Result<i32, Error> {
     let report = monitor.run(&watch, opts).await?;
     let rendered = render_leaks(&report, args.output.into_format());
     write_report(&rendered, args.out_file.as_deref())?;
+    // NDJSON carries events only, so problems always go to stderr too.
+    for row in report.failed_checks() {
+        eprintln!(
+            "butcherbird: {} {} search failed: {}",
+            row.watch.kind.as_str(),
+            row.watch.value,
+            row.detail
+        );
+    }
+    for warning in &report.warnings {
+        eprintln!("butcherbird: warning: {warning}");
+    }
     if args.dry_run {
         eprintln!("butcherbird: dry run, notified state not updated");
     } else {
         monitor.commit(&report)?;
     }
     eprintln!(
-        "butcherbird: {} new exposures, {} shown",
+        "butcherbird: {} new exposures, {} shown, {} searches failed",
         report.new_count(),
-        report.events.len()
+        report.events.len(),
+        report.failed_checks().count()
     );
     Ok(report.exit_code())
 }

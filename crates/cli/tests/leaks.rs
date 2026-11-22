@@ -176,3 +176,28 @@ fn empty_watch_list_and_bad_vip_are_config_errors() {
         .code(3)
         .stderr(predicates::str::contains("email addresses only"));
 }
+
+#[tokio::test]
+async fn ndjson_failure_is_on_stderr_and_exit_4() {
+    let server = hibp().await;
+    Mock::given(method("GET"))
+        .and(path("/breacheddomain/client.example"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    let dir = tempfile::tempdir().unwrap();
+    write_config(dir.path(), &server.uri());
+    leaks(dir.path(), &[]).code(1);
+    let out = leaks(
+        dir.path(),
+        &["--domain", "client.example", "--output", "ndjson"],
+    )
+    .code(4)
+    .stderr(predicates::str::contains(
+        "domain client.example search failed",
+    ))
+    .stderr(predicates::str::contains("1 searches failed"));
+    assert!(stdout(&out).is_empty());
+    let err = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(!err.contains("secret-key"), "{err}");
+}

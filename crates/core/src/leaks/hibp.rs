@@ -87,12 +87,27 @@ impl Breach {
     }
 }
 
+/// `GET /latestbreach`, reduced to what the change gate needs.
+#[derive(Deserialize)]
+struct Latest {
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "ModifiedDate", default)]
+    modified: Option<String>,
+}
+
+/// Rate for the keyless catalogue calls (`/latestbreach`, `/breach/{name}`).
+/// They do not count against the paid key's limit.
+const PUBLIC_RATE_PER_MINUTE: u32 = 60;
+
 /// HIBP v3 client.
 pub struct Hibp {
     client: reqwest::Client,
     api_key: Secret,
     base_url: String,
     gate: IntervalGate,
+    public_gate: IntervalGate,
+    no_key: Secret,
 }
 
 impl Hibp {
@@ -107,17 +122,27 @@ impl Hibp {
             client,
             api_key,
             base_url: base_url.into().trim_end_matches('/').to_string(),
+            public_gate: IntervalGate::per_minute(PUBLIC_RATE_PER_MINUTE.max(rate_per_minute)),
             gate: IntervalGate::per_minute(rate_per_minute),
+            no_key: Secret::new(""),
         }
     }
 
-    /// Most recently added breach. HIBP asks clients to poll this before a
-    /// domain search. No key is sent.
-    pub async fn latest_breach(&self) -> Result<Breach, ProviderError> {
+    /// Marker for the most recently added breach: its name and modified
+    /// time. HIBP asks clients to poll this before a domain search. No key is
+    /// sent.
+    pub async fn latest_marker(&self) -> Result<String, ProviderError> {
         let url = format!("{}/latestbreach", self.base_url);
-        let response =
-            http_send(&self.gate, &self.api_key, || self.client.get(&url).send()).await?;
-        response.json().await.map_err(|_| ProviderError::Decode)
+        let response = http_send(&self.public_gate, &self.no_key, || {
+            self.client.get(&url).send()
+        })
+        .await?;
+        let latest: Latest = response.json().await.map_err(|_| ProviderError::Decode)?;
+        Ok(format!(
+            "{}@{}",
+            latest.name,
+            latest.modified.unwrap_or_default()
+        ))
     }
 
     /// One breach by its stable name. No key is sent. 404 is `None`.
@@ -127,7 +152,11 @@ impl Hibp {
             self.base_url,
             crate::provider::encode_segment(name)
         );
-        match http_send(&self.gate, &self.api_key, || self.client.get(&url).send()).await {
+        match http_send(&self.public_gate, &self.no_key, || {
+            self.client.get(&url).send()
+        })
+        .await
+        {
             Ok(response) => response
                 .json()
                 .await
@@ -210,7 +239,7 @@ pub fn hibp_from_config(cfg: &Config) -> Result<Result<Hibp, Slot>, crate::Error
 pub(crate) mod tests {
     use super::*;
     use std::collections::HashMap;
-    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::matchers::{header, header_exists, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     pub(crate) fn breach_json(name: &str, classes: &[&str]) -> serde_json::Value {
@@ -246,25 +275,39 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn latest_breach_drops_unneeded_fields() {
+    async fn latest_marker_has_name_and_modified_time_and_no_key() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/latestbreach"))
+            .and(header_exists("user-agent"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .set_body_json(breach_json("Quokka", &["Email addresses", "Passwords"])),
             )
             .mount(&server)
             .await;
-        let breach = client(&server).latest_breach().await.unwrap();
-        assert_eq!(breach.name, "Quokka");
-        assert_eq!(breach.domain.as_deref(), Some("quokka.example"));
-        assert_eq!(breach.data_classes, ["Email addresses", "Passwords"]);
-        let out = serde_json::to_string(&breach).unwrap();
-        assert!(!out.contains("Fictional breach"), "{out}");
-        assert!(out.contains("\"breach_date\""), "{out}");
+        let marker = client(&server).latest_marker().await.unwrap();
+        assert_eq!(marker, "Quokka@2026-11-20T03:00:00Z");
         let requests = server.received_requests().await.unwrap();
         assert!(requests[0].headers.get("hibp-api-key").is_none());
+        let agent = requests[0]
+            .headers
+            .get("user-agent")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(agent.starts_with("butcherbird/"), "{agent}");
+    }
+
+    #[test]
+    fn decode_drops_unneeded_fields() {
+        let breach: Breach =
+            serde_json::from_value(breach_json("Quokka", &["Email addresses"])).unwrap();
+        assert_eq!(breach.domain.as_deref(), Some("quokka.example"));
+        let out = serde_json::to_string(&breach).unwrap();
+        assert!(!out.contains("Fictional breach"), "{out}");
+        assert!(!out.contains("PwnCount"), "{out}");
+        assert!(out.contains("\"breach_date\""), "{out}");
     }
 
     #[tokio::test]
@@ -285,6 +328,9 @@ pub(crate) mod tests {
         let hibp = client(&server);
         assert_eq!(hibp.breach("Quokka").await.unwrap().unwrap().name, "Quokka");
         assert!(hibp.breach("Gone").await.unwrap().is_none());
+        for request in server.received_requests().await.unwrap() {
+            assert!(request.headers.get("hibp-api-key").is_none());
+        }
     }
 
     #[tokio::test]
@@ -385,15 +431,18 @@ pub(crate) mod tests {
             .respond_with(ResponseTemplate::new(400).set_body_string("bad bb-test-secret-key"))
             .mount(&server)
             .await;
-        Mock::given(method("GET"))
-            .and(path("/breachedaccount/vip%40example.com"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
-            .mount(&server)
-            .await;
+        // wiremock tries mounts in order, so the one-shot 429 must come first.
         Mock::given(method("GET"))
             .and(path("/breachedaccount/vip%40example.com"))
             .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "0"))
             .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/breachedaccount/vip%40example.com"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .expect(1)
             .mount(&server)
             .await;
         let hibp = client(&server);

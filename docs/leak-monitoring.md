@@ -13,13 +13,14 @@
 [profiles.default.leaks]
 domains = ["example.com"]
 vips = ["ceo@example.net"]
+recheck_days = 7
 
 [profiles.default.providers.hibp]
 api_key_env = "HIBP_API_KEY"
 rate_per_minute = 10
 ```
 
-`--domain` and `--vip` add to the configured list for one run. A VIP must be an email address, because HIBP account search takes email addresses only. Usernames and phone numbers are rejected.
+`--domain` and `--vip` add to the configured list for one run. A VIP must be an email address, because HIBP account search takes email addresses only. Usernames and phone numbers are rejected. Any TLD is accepted, including punycode (`xn--`) names.
 
 Set `rate_per_minute` to your plan's limit, or lower. The default is 10, the smallest paid plan. A 429 is retried with backoff.
 
@@ -40,14 +41,18 @@ There is no daemon. Schedule it with cron, launchd or a systemd timer:
 15 7 * * * . /etc/butcherbird/env && butcherbird leaks --output markdown --out-file /var/lib/butcherbird/leaks.md
 ```
 
-Each run calls `GET /latestbreach` first. That call needs no key. If HIBP has not added a breach since a watch entry's last search, that entry is not searched again and shows as `unchanged`. This follows HIBP's guidance to poll the latest breach and search domains only when something changes. `--force` searches every entry. `--all` also searches every entry, and lists exposures already reported on earlier runs with `new: false`.
+Each run calls `GET /latestbreach` first. That call needs no key. The marker is the newest breach's name and its `ModifiedDate`, so data added to that breach also counts as a change. If the marker matches a watch entry's last search, and that search is less than `recheck_days` old (default 7), the entry is not searched again and shows as `unchanged`. This follows HIBP's guidance to poll the latest breach and search domains only when something changes. HIBP can also add addresses to an older breach without changing the latest one. `recheck_days` bounds how long such an update can go unseen. Set it to `0` to search every entry on every run. `--force` searches every entry. `--all` also searches every entry, and lists exposures already reported on earlier runs with `new: false`. If `/latestbreach` fails, every entry is searched and a warning is printed.
+
+The keyless calls (`/latestbreach` and `/breach/{name}`) use their own client-side rate of 60 a minute, so they do not use up the paid key's budget. Domain and account searches use `rate_per_minute`.
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Finished. Nothing new |
-| 1 | At least one new exposure |
+| 0 | Finished. Nothing new, and no search failed |
+| 1 | At least one new exposure. Some searches may also have failed, see stderr |
 | 3 | Bad config, nothing to watch, or HIBP skipped (no key or `enabled = false`) |
-| 4 | Every search failed |
+| 4 | Nothing new, and at least one search failed |
+
+Failed searches and warnings always go to stderr, whatever `--output` is. NDJSON carries events only, so watch stderr and the exit code in a scheduled job.
 
 ## What is stored
 
@@ -55,10 +60,12 @@ The leak monitor writes two tables in the cache SQLite file (`cache.path`). It i
 
 | Table | Columns | Purpose |
 | --- | --- | --- |
-| `leak_seen` | source, SHA-256 of the address, breach name, first seen (Unix seconds) | So a rerun does not report the same exposure again |
-| `leak_watch` | source, SHA-256 of the watch entry, latest breach name, checked at | So an unchanged HIBP catalogue skips the search |
+| `leak_seen` | source, SHA-256 of the address, SHA-256 of the breach name, first seen (Unix seconds) | So a rerun does not report the same exposure again |
+| `leak_watch` | source, SHA-256 of the watch entry, latest-breach marker (public breach name and modified time), checked at | So an unchanged HIBP catalogue skips the search |
 
-Addresses and watch entries are stored as unsalted SHA-256 digests, not plaintext. A digest of an email address can be reversed by guessing, so treat the file as sensitive anyway. Keep it on an encrypted disk, readable only by the account that runs the job. The tool does not store breach descriptions, passwords, hashes or any other breach content. Breach metadata (title, dates, data classes, flags) is fetched on each run and only goes to the output.
+Addresses, breach names and watch entries are stored as unsalted SHA-256 digests, not plaintext. The only plaintext is the public latest-breach marker. A digest of an email address can be reversed by guessing, so treat the file as sensitive anyway. On Unix the file is set to mode `0600` when the leak monitor opens it. Keep it on an encrypted disk. The tool does not store breach descriptions, passwords, hashes or any other breach content. Breach metadata (title, dates, data classes, flags) is fetched on each run and only goes to the output.
+
+An exposure is remembered only when its breach metadata was read. If `GET /breach/{name}` fails, the exposure is shown with every reset step, a warning says why, and the next run shows it again.
 
 State is written after the output has been written. If the write fails, the next run reports the same exposures again. That is deliberate: a missed notice is worse than a repeated one. `--dry-run` writes nothing. To start again, delete the rows:
 
@@ -79,13 +86,13 @@ The output is sensitive. It lists real addresses next to breach names. Do not pa
 
 Breach data from HIBP is licensed CC BY 4.0. Every rendering (table, JSON, NDJSON and Markdown) carries the credit line "Breach data from Have I Been Pwned (https://haveibeenpwned.com), CC BY 4.0". Keep it if you pass the output on.
 
-Stay inside HIBP's acceptable use. Search only domains you control and addresses you are responsible for. Do not use the results to harm the people in a breach. Domain search returns sensitive breaches for verified domains. Treat those with extra care. The user agent is `butcherbird/<version>`. Do not change it to pose as another client.
+Stay inside HIBP's acceptable use. Search only domains you control and addresses you are responsible for. Do not use the results to harm the people in a breach. Domain search returns sensitive breaches for verified domains. Treat those with extra care. The table and Markdown show a flags column (`sensitive`, `stealer-log`, `unverified`, `fabricated`, `spam-list`), and the Markdown adds a sharing note when a sensitive breach is listed. The user agent is `butcherbird/<version>`. Do not change it to pose as another client.
 
 A 404 from account search means HIBP has nothing it can disclose. It does not prove the address was never in a breach.
 
 ## Reset advice
 
-Each event lists recommended steps taken from the breach's data classes. These are generic. Your identity provider's own process comes first.
+Each event lists recommended steps taken from the breach's data classes. These are generic. Your identity provider's own process comes first. A breach with no data classes (its metadata could not be read) gets every step.
 
 | Id | When | What |
 | --- | --- | --- |
@@ -99,7 +106,7 @@ Butcherbird does not run any of these. There is no Microsoft Graph, Okta or Goog
 
 ## Event shape: `butcherbird.leak.v1`
 
-`--output ndjson` writes one event per line. `--output json` writes the whole run, with the same events under `events`. A downstream case tool (for example Junction or Bower) can read either. This repository does not contain that ingestion.
+`--output ndjson` writes one event per line. `--output json` writes the whole run: `checks`, `warnings`, and the same events under `events`. A downstream case tool (for example Junction or Bower) can read either. This repository does not contain that ingestion.
 
 ```json
 {
@@ -138,11 +145,11 @@ Butcherbird does not run any of these. There is no Microsoft Graph, Okta or Goog
 | `schema` | Always `butcherbird.leak.v1` |
 | `event_id` | First 32 hex characters of SHA-256 over source, identity and breach name. The same exposure has the same id on every run. Use it to dedupe |
 | `source` | Data source id. `hibp` in this version |
-| `watch.kind` | `domain` or `vip` |
+| `watch.kind` | `domain` or `vip`. When an address matches both a VIP and a watched domain, it is reported once as `vip` |
 | `watch.value` | The watch entry that matched |
-| `identity` | The affected email address |
+| `identity` | The affected email address, lower case |
 | `breach.name` | HIBP's stable breach id |
-| `breach.*` | Metadata only. `title`, `domain`, `breach_date` and `added_date` can be `null`. `data_classes` can be empty if the breach lookup failed |
+| `breach.*` | Metadata only. `title`, `domain`, `breach_date` and `added_date` can be `null`. `data_classes` is empty when the breach lookup failed, and then `recommended_actions` lists every step |
 | `first_seen` | When this tool first reported the exposure, RFC 3339 UTC |
 | `observed_at` | When this run saw it |
 | `new` | `true` the first time it is reported |

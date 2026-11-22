@@ -1,6 +1,10 @@
 //! Table, JSON and Markdown renderings of a leak run.
+//!
+//! Breach titles, data classes and error text come from HIBP. They are
+//! treated as untrusted: control characters are dropped for the table, and
+//! Markdown cells are escaped so they cannot add links, HTML or rows.
 
-use super::{CheckStatus, LeakReport};
+use super::{LeakEvent, LeakReport};
 
 /// Leak output formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +28,8 @@ pub fn render_leaks(report: &LeakReport, format: LeakOutput) -> String {
             out.push('\n');
             out
         }
+        // Events only. Failed searches and warnings are on stderr and in the
+        // exit code.
         LeakOutput::Ndjson => report
             .events
             .iter()
@@ -34,7 +40,38 @@ pub fn render_leaks(report: &LeakReport, format: LeakOutput) -> String {
     }
 }
 
-fn actions(event: &super::LeakEvent) -> String {
+/// Flags worth a reader's attention before the output is shared.
+pub(crate) fn flags(event: &LeakEvent) -> Vec<&'static str> {
+    let b = &event.breach;
+    let mut out = Vec::new();
+    if b.is_sensitive {
+        out.push("sensitive");
+    }
+    if b.is_stealer_log {
+        out.push("stealer-log");
+    }
+    if !b.is_verified {
+        out.push("unverified");
+    }
+    if b.is_fabricated {
+        out.push("fabricated");
+    }
+    if b.is_spam_list {
+        out.push("spam-list");
+    }
+    out
+}
+
+/// Printable text on one line. Control characters (newlines, ANSI escapes)
+/// become spaces.
+fn plain(value: &str) -> String {
+    value
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
+fn actions(event: &LeakEvent) -> String {
     event
         .recommended_actions
         .iter()
@@ -50,18 +87,20 @@ fn table(report: &LeakReport) -> String {
         "ADDED",
         "FIRST SEEN",
         "NEW",
+        "FLAGS",
         "RECOMMENDED",
     ];
-    let rows: Vec<[String; 6]> = report
+    let rows: Vec<[String; 7]> = report
         .events
         .iter()
         .map(|event| {
             [
-                event.identity.clone(),
-                event.breach.name.clone(),
-                event.breach.added_date.clone().unwrap_or_default(),
+                plain(&event.identity),
+                plain(&event.breach.name),
+                plain(event.breach.added_date.as_deref().unwrap_or("")),
                 event.first_seen.clone(),
                 if event.new { "yes" } else { "no" }.to_string(),
+                flags(event).join(","),
                 actions(event),
             ]
         })
@@ -91,28 +130,33 @@ fn table(report: &LeakReport) -> String {
             line(row, &mut out);
         }
     }
-    let skipped: Vec<String> = report
-        .checks
-        .iter()
-        .filter(|row| row.status == CheckStatus::Error)
-        .map(|row| {
-            format!(
-                "{} {}: {}",
-                row.watch.kind.as_str(),
-                row.watch.value,
-                row.detail
-            )
-        })
-        .collect();
-    for line in skipped {
-        out.push_str(&format!("error: {line}\n"));
+    for row in report.failed_checks() {
+        out.push_str(&format!(
+            "error: {} {}: {}\n",
+            row.watch.kind.as_str(),
+            plain(&row.watch.value),
+            plain(&row.detail)
+        ));
+    }
+    for warning in &report.warnings {
+        out.push_str(&format!("warning: {}\n", plain(warning)));
     }
     out.push_str(&format!("{}\n", report.attribution));
     out
 }
 
+/// Escape a Markdown table cell. Every ASCII punctuation character that
+/// Markdown or HTML gives meaning to is backslash-escaped, so a breach title
+/// cannot open a link, an HTML tag, emphasis or a new column.
 fn cell(value: &str) -> String {
-    value.replace('|', "\\|").replace('\n', " ")
+    let mut out = String::with_capacity(value.len());
+    for c in plain(value).chars() {
+        if "\\`*_{}[]()<>#!|~&\"'".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn markdown(report: &LeakReport) -> String {
@@ -140,19 +184,23 @@ fn markdown(report: &LeakReport) -> String {
         out.push_str("No new exposures.\n");
     } else {
         out.push_str(
-            "| Identity | Breach | Breach date | Added to source | First seen | New | Data classes |\n| --- | --- | --- | --- | --- | --- | --- |\n",
+            "| Identity | Breach | Breach date | Added to source | First seen | New | Flags | Data classes |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n",
         );
         for event in &report.events {
             out.push_str(&format!(
-                "| {} | {} | {} | {} | {} | {} | {} |\n",
+                "| {} | {} | {} | {} | {} | {} | {} | {} |\n",
                 cell(&event.identity),
                 cell(event.breach.title.as_deref().unwrap_or(&event.breach.name)),
                 cell(event.breach.breach_date.as_deref().unwrap_or("")),
                 cell(event.breach.added_date.as_deref().unwrap_or("")),
                 event.first_seen,
                 if event.new { "yes" } else { "no" },
+                flags(event).join(", "),
                 cell(&event.breach.data_classes.join(", "))
             ));
+        }
+        if report.events.iter().any(|event| event.breach.is_sensitive) {
+            out.push_str("\nSensitive breaches are listed. Share this report only with people who need it.\n");
         }
         out.push_str("\n## Recommended reset path\n\n");
         out.push_str("Advice only. Butcherbird has not changed any account.\n\n");
@@ -175,8 +223,14 @@ fn markdown(report: &LeakReport) -> String {
                 "- **{}**: {}. For: {}.\n",
                 action.id(),
                 action.summary(),
-                who.into_iter().collect::<Vec<_>>().join(", ")
+                who.into_iter().map(cell).collect::<Vec<_>>().join(", ")
             ));
+        }
+    }
+    if !report.warnings.is_empty() {
+        out.push_str("\n## Warnings\n\n");
+        for warning in &report.warnings {
+            out.push_str(&format!("- {}\n", cell(warning)));
         }
     }
     out.push_str(&format!("\n{}\n", report.attribution));
@@ -187,7 +241,7 @@ fn markdown(report: &LeakReport) -> String {
 mod tests {
     use super::*;
     use crate::leaks::event::{WatchKind, WatchRef};
-    use crate::leaks::{Breach, CheckRow, LeakEvent, HIBP_ATTRIBUTION};
+    use crate::leaks::{Breach, CheckRow, CheckStatus, LeakEvent, HIBP_ATTRIBUTION};
 
     fn report() -> LeakReport {
         let event = LeakEvent::new(
@@ -195,7 +249,9 @@ mod tests {
             WatchRef::new(WatchKind::Domain, "example.com"),
             "alex@example.com".into(),
             Breach {
-                title: Some("Quokka | Forum".into()),
+                title: Some("Quokka | [Reset](https://phish.example) <img src=x>".into()),
+                is_verified: true,
+                is_sensitive: true,
                 added_date: Some("2026-11-20T03:00:00Z".into()),
                 data_classes: vec!["Email addresses".into(), "Passwords".into()],
                 ..Breach::named("Quokka")
@@ -216,9 +272,10 @@ mod tests {
                 CheckRow {
                     watch: WatchRef::new(WatchKind::Vip, "vip@example.net"),
                     status: CheckStatus::Error,
-                    detail: "rate limit exceeded".into(),
+                    detail: "http 500: line one\nline two \u{1b}[31m".into(),
                 },
             ],
+            warnings: vec!["breach Wombat metadata unavailable (transport error)".into()],
             events: vec![event],
             pending_seen: Vec::new(),
             pending_watch: Vec::new(),
@@ -235,16 +292,33 @@ mod tests {
             "{out}"
         );
         assert!(
-            out.contains("error: vip vip@example.net: rate limit exceeded"),
+            out.contains("error: vip vip@example.net: http 500: line one line two  [31m"),
             "{out}"
         );
+        assert!(!out.contains('\u{1b}'), "{out}");
+        assert!(out.contains("warning: breach Wombat"), "{out}");
+        assert!(out.contains("sensitive"), "{out}");
         assert!(out.contains("Have I Been Pwned"), "{out}");
     }
 
     #[test]
     fn markdown_has_reset_path_and_escapes_pipes() {
         let out = render_leaks(&report(), LeakOutput::Markdown);
-        assert!(out.contains("Quokka \\| Forum"), "{out}");
+        // Title cannot add a column, a link or HTML.
+        assert!(
+            out.contains("Quokka \\| \\[Reset\\]\\(https://phish.example\\) \\<img src=x\\>"),
+            "{out}"
+        );
+        assert!(!out.contains("](https://phish"), "{out}");
+        assert!(!out.replace("\\<", "").contains('<'), "{out}");
+        let row = out.lines().find(|line| line.starts_with("| alex")).unwrap();
+        // 8 columns means 9 unescaped pipes.
+        let pipes = row.matches('|').count() - row.matches("\\|").count();
+        assert_eq!(pipes, 9, "{row}");
+        assert!(out.contains("| sensitive |"), "{out}");
+        assert!(out.contains("Sensitive breaches are listed"), "{out}");
+        assert!(out.contains("## Warnings"), "{out}");
+        assert!(!out.contains('\u{1b}'), "{out}");
         assert!(out.contains("## Recommended reset path"), "{out}");
         assert!(
             out.contains("- **password_reset**: Reset the password"),

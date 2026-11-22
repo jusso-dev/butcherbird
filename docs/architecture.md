@@ -73,11 +73,11 @@ Abuse mail calls `plan` before the dedupe check, so a dry run and a duplicate bo
 `butcherbird leaks` lives in `crates/core/src/leaks`. It is not a `Provider`: `check` never calls it, and its results do not vote in `score::combine`.
 
 1. The watch list is `leaks.domains` and `leaks.vips`, plus `--domain` and `--vip`. Values go through `parse_ioc`. A VIP must be an email address.
-2. `GET /latestbreach` (no key). For each watch entry, if `leak_watch` already holds that breach name, the entry is `unchanged` and not searched. `--force` and `--all` search anyway.
+2. `GET /latestbreach` (no key). The marker is the newest breach's name and `ModifiedDate`. For each watch entry, if `leak_watch` holds the same marker and its search is less than `leaks.recheck_days` old, the entry is `unchanged` and not searched. `--force` and `--all` search anyway. If the call fails, every entry is searched.
 3. Domains use `GET /breacheddomain/{domain}`. VIPs use `GET /breachedaccount/{email}?truncateResponse=false`. Both send `hibp-api-key`. 404 is an empty result. 401 or 403 on a domain says the domain must be verified.
-4. An exposure is one address and one breach name. `leak_seen` decides whether it is new. Breach metadata comes from the account response or `GET /breach/{name}` (no key).
+4. An exposure is one lower-case address and one breach name. A VIP match wins over a domain match for the same address. `leak_seen` decides whether it is new. Breach metadata comes from the account response or `GET /breach/{name}` (no key). If that lookup fails, the event gets every reset step and is not remembered.
 5. Recommended actions come from the data classes. Events use `butcherbird.leak.v1`.
-6. The output is written. Then, unless `--dry-run`, new `leak_seen` rows and `leak_watch` markers are written in one transaction.
+6. The output is written. Failed searches and warnings go to stderr. Then, unless `--dry-run`, new `leak_seen` rows and `leak_watch` markers are written in one transaction. A marker older than the stored one is not written back. Exit 1 means new exposures, 4 means nothing new and at least one failed search.
 
 | Id | Tier | Auth | Watches | Default rate |
 | --- | --- | --- | --- | --- |

@@ -107,20 +107,74 @@ pub struct Config {
 }
 
 /// Watch list for the leak monitor. Values are normalised and validated.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeakSettings {
     /// Domains verified on the HIBP account, lower case.
     pub domains: Vec<String>,
     /// Named email addresses to check one by one, lower case.
     pub vips: Vec<String>,
+    /// Search an entry at least this often, even when HIBP's latest breach
+    /// has not changed. `0` searches every run. Default 7.
+    pub recheck_days: u32,
+}
+
+impl Default for LeakSettings {
+    fn default() -> Self {
+        Self {
+            domains: Vec::new(),
+            vips: Vec::new(),
+            recheck_days: 7,
+        }
+    }
+}
+
+/// Lower-case DNS name, or `None`. Any TLD is accepted, including
+/// punycode, because these are names the operator owns.
+fn watch_domain(raw: &str) -> Option<String> {
+    let name = raw.trim().trim_end_matches('.').to_ascii_lowercase();
+    if name.is_empty() || name.len() > 253 || !name.is_ascii() {
+        return None;
+    }
+    if name.parse::<std::net::Ipv4Addr>().is_ok() {
+        return None;
+    }
+    let labels: Vec<&str> = name.split('.').collect();
+    let label_ok = |label: &&str| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    };
+    let tld = labels.last()?;
+    if labels.len() < 2 || !labels.iter().all(label_ok) || tld.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(name)
+}
+
+/// Lower-case mailbox, or `None`. The local part allows the printable
+/// characters a real mailbox can use, such as `+` and `'`.
+fn watch_email(raw: &str) -> Option<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    let (local, domain) = value.rsplit_once('@')?;
+    let local_ok = !local.is_empty()
+        && local.len() <= 64
+        && local
+            .chars()
+            .all(|c| c.is_ascii_graphic() && !"\"(),:;<>@[\\]".contains(c));
+    if !local_ok {
+        return None;
+    }
+    Some(format!("{local}@{}", watch_domain(domain)?))
 }
 
 impl LeakSettings {
     /// Add one domain. Rejects values that are not a DNS name.
     pub fn add_domain(&mut self, raw: &str) -> Result<(), Error> {
-        let value = match crate::ioc::parse_ioc(raw) {
-            Some(ioc) if ioc.kind == crate::ioc::IocType::Domain => ioc.value,
-            _ => {
+        let value = match watch_domain(raw) {
+            Some(value) => value,
+            None => {
                 return Err(Error::Config(format!(
                     "leaks domain `{}` is not a domain name",
                     raw.trim()
@@ -135,9 +189,9 @@ impl LeakSettings {
 
     /// Add one VIP. HIBP account search takes email addresses only.
     pub fn add_vip(&mut self, raw: &str) -> Result<(), Error> {
-        let value = match crate::ioc::parse_ioc(raw) {
-            Some(ioc) if ioc.kind == crate::ioc::IocType::Email => ioc.value,
-            _ => {
+        let value = match watch_email(raw) {
+            Some(value) => value,
+            None => {
                 return Err(Error::Config(format!(
                     "leaks vip `{}` is not an email address. HIBP account search takes email addresses only",
                     raw.trim()
@@ -364,6 +418,9 @@ fn resolve_leaks(raw: Option<&LeaksFile>) -> Result<LeakSettings, Error> {
     }
     for vip in &raw.vips {
         out.add_vip(vip)?;
+    }
+    if let Some(days) = raw.recheck_days {
+        out.recheck_days = days;
     }
     Ok(out)
 }
@@ -698,6 +755,7 @@ struct LeaksFile {
     domains: Vec<String>,
     #[serde(default)]
     vips: Vec<String>,
+    recheck_days: Option<u32>,
 }
 
 #[derive(Clone, Deserialize, Default)]
@@ -994,8 +1052,9 @@ mod tests {
         let cfg = Config::from_toml_with_env(
             r#"
             [profiles.default.leaks]
-            domains = ["Example.COM", "example.com", "corp[.]example"]
-            vips = [" CEO@Example.com "]
+            domains = ["Example.COM", "example.com", "corp.example.", "acme.md", "xn--80ak6aa92e.com"]
+            vips = [" CEO@Example.com ", "o'connor+it@example.net"]
+            recheck_days = 1
 
             [profiles.default.providers.hibp]
             api_key = "file-secret-should-lose"
@@ -1004,8 +1063,20 @@ mod tests {
             &env,
         )
         .unwrap();
-        assert_eq!(cfg.leaks.domains, ["example.com", "corp.example"]);
-        assert_eq!(cfg.leaks.vips, ["ceo@example.com"]);
+        assert_eq!(
+            cfg.leaks.domains,
+            [
+                "example.com",
+                "corp.example",
+                "acme.md",
+                "xn--80ak6aa92e.com"
+            ]
+        );
+        assert_eq!(
+            cfg.leaks.vips,
+            ["ceo@example.com", "o'connor+it@example.net"]
+        );
+        assert_eq!(cfg.leaks.recheck_days, 1);
         assert_eq!(
             cfg.provider("hibp")
                 .api_key
@@ -1020,6 +1091,7 @@ mod tests {
 
         let empty = Config::from_toml_with_env("", None, &HashMap::new()).unwrap();
         assert!(empty.leaks.is_empty());
+        assert_eq!(empty.leaks.recheck_days, 7);
         assert!(empty.provider("hibp").api_key.is_none());
         assert_eq!(
             empty.provider("hibp").api_key_env.as_deref(),
@@ -1044,6 +1116,25 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("not a domain"), "{err}");
+
+        for bad in [
+            "-bad.example",
+            "a..example",
+            "bad_label.example",
+            "localhost",
+        ] {
+            let mut watch = LeakSettings::default();
+            assert!(watch.add_domain(bad).is_err(), "{bad}");
+        }
+        for bad in [
+            "a b@example.com",
+            "@example.com",
+            "x@192.0.2.1",
+            "a<b@example.com",
+        ] {
+            let mut watch = LeakSettings::default();
+            assert!(watch.add_vip(bad).is_err(), "{bad}");
+        }
 
         let err = Config::from_toml_with_env(
             "[profiles.default.leaks]\nemails = [\"a@example.com\"]\n",

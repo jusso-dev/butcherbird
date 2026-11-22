@@ -110,6 +110,8 @@ dir = "butcherbird-evidence"
 # [profiles.default.leaks]
 # domains = ["example.com"]
 # vips = ["ceo@example.net"]
+# Search each entry at least this often, even when HIBP's latest breach is unchanged. 0 = every run.
+# recheck_days = 7
 
 [profiles.default.providers.hibp]
 api_key_env = "HIBP_API_KEY"

@@ -38,7 +38,7 @@ The key is a paid HIBP key. Keep it in `HIBP_API_KEY`, not in a committed file a
 
 The output lists real addresses next to breach names. Treat it as incident data. HIBP data is CC BY 4.0. Keep the attribution line when you pass it on. Do not use it to harm the people in a breach.
 
-The reset advice is generic. Butcherbird does not reset passwords, revoke sessions or change anything in a tenant, and it does not contact the people affected, HIBP, or law enforcement. Do that yourself, through your normal process. The state file stores SHA-256 digests of addresses, which can be reversed by guessing. Protect it like the output. Details are in [leak monitoring](leak-monitoring.md).
+The reset advice is generic. Butcherbird does not reset passwords, revoke sessions or change anything in a tenant, and it does not contact the people affected, HIBP, or law enforcement. Do that yourself, through your normal process. The state file stores SHA-256 digests of addresses and breach names, which can be reversed by guessing. On Unix it is set to mode `0600`. Protect it like the output. Details are in [leak monitoring](leak-monitoring.md).
 
 ## Fixtures
 
